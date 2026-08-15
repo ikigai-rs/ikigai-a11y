@@ -1,0 +1,48 @@
+# CI for ikigai-a11y. Two shapes to keep honest:
+#
+#  * the DEFAULT build is the pure one — contrast maths, the layered merge and
+#    the CSS floor pass — and it must stay wasm-clean, because the browser demo
+#    is a real consumer of those halves,
+#  * the `themes` feature adds syntect + two-face (the theme-name bridge and the
+#    turnkey "this theme, but legible" call). The table of theme names is
+#    hand-maintained so the default build needn't carry 2MB of theme data, and
+#    `the_theme_table_matches_two_face` is the only thing standing between that
+#    table and drift — so the featured test suite runs here, not just locally.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy (native, all targets)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test
+
+      - name: clippy (all features, all targets)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: test (all features)
+        run: cargo test --all-features
+
+      # The pure halves, on the target the browser host builds for. The config
+      # loader and the endpoints that need it are cfg'd out there, so this also
+      # checks that the cfg seams actually hold.
+      - name: clippy (wasm lib)
+        run: cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings
