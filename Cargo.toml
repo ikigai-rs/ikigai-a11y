@@ -1,6 +1,6 @@
 [package]
 name = "ikigai-a11y"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Accessibility as a resolvable ikigai resource: the layered a11y config (a11y.toml ⊕ {app}.a11y.toml), WCAG contrast math, and a contrast-floor pass that repairs a syntax theme's own CSS in its own palette."

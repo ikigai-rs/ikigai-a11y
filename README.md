@@ -9,6 +9,7 @@ control plane can reuse instead of re-deriving per front end.
 
 ```text
 source urn:a11y:config:cms-web                     # the EFFECTIVE merged config
+source urn:a11y:presentation:cms-web               # the rendering half of it, ungated
 source urn:a11y:config as=text/turtle              # the skolemized graph face
 source urn:a11y:contrast from=#323232 on=#2b303b
 → 1.03 fail
@@ -18,18 +19,89 @@ source urn:a11y:contrast from=#323232 on=#2b303b
 
 | resource | what it serves | capability |
 | --- | --- | --- |
-| `urn:a11y:config` | the effective config for this machine | `urn:cap:a11y:read` |
+| `urn:a11y:config` | the whole effective config for this machine | `urn:cap:a11y:read` |
 | `urn:a11y:config:{app}` | …with `{app}`'s override layer applied | `urn:cap:a11y:read` |
+| `urn:a11y:presentation` | the **rendering half**: themes, contrast floors, link underlining | none |
+| `urn:a11y:presentation:{app}` | …with `{app}`'s override layer applied | none |
 | `urn:a11y:contrast` | the WCAG ratio of two colours, and whether it clears a floor | none |
 
 Faces: `text/plain` (TOML), `as=application/json`, `as=text/turtle` (skolemized,
-no blank nodes, with `ik:layer` links to the files that contributed).
+no blank nodes; the gated view links the files that contributed as
+`prov:wasDerivedFrom` plus `ik:sharedLayer`/`ik:appLayer`).
 
 `urn:a11y:contrast` requires no capability because it is arithmetic over two
 colours the caller already holds; declaring one would make the manifold
 under-offer. `urn:a11y:config` requires one because it states whether the person
 at the keyboard needs reduced motion and larger text — assistive-technology
 information about a human being, not decoration.
+
+## ★ Two views, and the rule that goes with them
+
+**Deriving an artifact — a stylesheet, a palette, a rendered page? Read
+`urn:a11y:presentation`, or `ikigai_a11y::load::presentation`.** It hands over
+the configured themes, both contrast floors and whether links are underlined, and
+it cannot hand over anything about the person reading. No capability is needed,
+because none of it is about them.
+
+`urn:a11y:config` and `ikigai_a11y::load::complete` serve the whole thing,
+`motion.reduce` and `text.scale` included. Two callers are entitled to that: the
+thing serving the gated resource, and a process configuring itself for the user
+it runs as.
+
+### What the capability actually protects
+
+**The resource, not the files.** A capability is checked when the kernel resolves
+an IRI. Nothing checks one when a linked library reads `a11y.toml` with
+`std::fs` — and nothing could: a consumer that wanted the bytes could open the
+file itself whether or not this crate existed. On disk the config is protected by
+filesystem permissions and by nothing else.
+
+That is the shape of the thing rather than a hole in it. `urn:cap:a11y:read` is
+the only fence that exists where it matters most — an agent's action manifold, a
+peer across a transport, an MCP projection — and an in-process consumer is
+already running as the user whose home directory it is reading.
+
+So the crate does what a library *can* do, which is least privilege: it makes the
+ungated path lead somewhere harmless. `ikigai-browse` 0.2.12 is why this is
+written down. It needs two theme names and a floor, and got `motion.reduce` and
+`text.scale` as well — not because it wanted them, but because there was one
+function. Three more front ends were queued to copy that call.
+
+### Why a second IRI rather than a face
+
+`as=` cannot carry authority. `requires` is per-action, so an action whose
+capability requirement depends on which arguments arrive must declare either the
+union (over-demanding for the ungated call) or the intersection (a lie for the
+gated one). Authority that differs becomes an **action** that differs — the same
+reason `urn:a11y:contrast` takes an explicit `min` instead of reading the
+configured floor. `urn:a11y:presentation` is this crate's
+`urn:personal:availability`: a separate name for the minimized view at the lower
+authority.
+
+The two graph faces therefore carry **different subjects**. On
+`urn:a11y:presentation` an absent `ik:reduceMotion` means *withheld*; on
+`urn:a11y:config` it means *unstated*. Sharing a subject would merge those the
+moment a reader unioned the graphs.
+
+### Where the line is drawn
+
+| | | |
+| --- | --- | --- |
+| `theme.light` / `theme.dark` | how the artifact is drawn | ungated |
+| `contrast.min` / `contrast.min_large` | the deployment's floor | ungated |
+| `text.underline_links` | WCAG 1.4.1 posture — about the artifact | ungated |
+| `motion.reduce` | this person needs animation suppressed | gated |
+| `text.scale` | this person needs text at 1.75× | gated |
+| contributing file paths | absolute paths in someone's home | gated |
+
+`A11y::presentation` is the only projection, so **a new key is withheld by
+default** and publishing it takes a deliberate line of code — the safe direction
+for the default to point.
+
+The residual, stated rather than papered over: a `contrast.min` of 7.0 is a weak
+signal that *someone* here wants AAA. It is machine-wide rather than per-person,
+it is the operator's posture about the artifact, and anything that renders the
+page has to be able to read it. That is a judgement, not an oversight.
 
 ## The layering
 
@@ -118,7 +190,7 @@ embedded themes at a given floor.
 
 ## Cacheability
 
-`urn:a11y:config` is `.cacheable()` with a golden thread on **every candidate
+Both views are `.cacheable()` with a golden thread on **every candidate
 file** — including ones that do not exist yet, so creating an override
 invalidates a cached answer computed before it existed.
 
@@ -144,7 +216,7 @@ stylesheets recompute, nothing polls.
 | module | | |
 | --- | --- | --- |
 | `color` | WCAG luminance and ratio, alpha-composited | pure, wasm |
-| `config` | schema, key-wise merge, the three faces | pure, wasm |
+| `config` | schema, key-wise merge, both views, the three faces | pure, wasm |
 | `css` | the contrast-floor pass over generated CSS | pure, wasm |
 | `load` | the layered read from the config home | native |
 | `themes` | theme name ⇄ `syntect` theme, turnkey CSS | feature `themes` |

@@ -19,6 +19,19 @@
 //! the moment one front end wants a different theme. `merge_preserves_a_floor_the_
 //! upper_layer_never_mentions` pins it.
 //!
+//! ## Two views, one file
+//!
+//! The operator writes **one** `a11y.toml`; the crate exposes it as two views,
+//! because two different things want it. [`A11y`] is the whole effective config,
+//! person-facts included, and is served only through the capability-gated
+//! `urn:a11y:config`. [`Presentation`] is the rendering half — themes, contrast
+//! floors, link underlining — and is what a consumer deriving an artifact reads.
+//! [`A11y::presentation`] is the projection, and the only one.
+//!
+//! Splitting the views rather than the file is deliberate. The sensitivity line
+//! runs between "how this page is drawn" and "what this person needs"; it does
+//! not run between two files an operator should have to keep in sync.
+//!
 //! ## Loud, not lenient
 //!
 //! An unknown theme name, an out-of-range number and an **unknown key** are all
@@ -451,6 +464,22 @@ impl A11y {
         effective
     }
 
+    /// The [`Presentation`] half — the rendering facts, with the person-facts
+    /// dropped.
+    ///
+    /// **This is the only place the sensitivity split is written down.** Adding a
+    /// key to [`A11y`] therefore withholds it from the ungated view by default,
+    /// and publishing it takes a deliberate line here. That direction is the
+    /// point: the failure mode worth engineering against is a new preference
+    /// quietly joining the public side, not one taking a release to get there.
+    pub fn presentation(&self) -> Presentation {
+        Presentation {
+            theme: self.theme.clone(),
+            contrast: self.contrast.clone(),
+            underline_links: self.text.underline_links,
+        }
+    }
+
     /// The `text/plain` (and TOML) face: the effective config as a config file.
     /// Round-trips — feeding this back through [`Patch::parse`] yields the same
     /// effective config, which is what makes it a usable starting point for an
@@ -541,6 +570,142 @@ impl A11y {
             out.push_str(&format!(";\n    {} <{iri}> ", layer_role(layer)));
         }
         out.push_str(".\n");
+        out
+    }
+}
+
+/// The **presentation** half of the config: how a page is drawn, and nothing
+/// about the person reading it.
+///
+/// This is the view a consumer deriving an artifact — a stylesheet, a palette, a
+/// rendered page — actually needs, and it is what `urn:a11y:presentation` serves
+/// to a caller holding no capability at all. Theme names, contrast floors and
+/// whether links carry an underline are facts about **the deployment's rendering
+/// posture**: an operator's decision about the artifact, written once and true
+/// for every reader of it.
+///
+/// What it deliberately omits is [`Motion::reduce`] and [`Text::scale`], which
+/// are facts about a **human being** — that the person at this keyboard needs
+/// animation suppressed, or text at 1.75×. Those stay on [`A11y`], behind
+/// `urn:cap:a11y:read`.
+///
+/// It also names no [layers](A11y::layers). Provenance here would be absolute
+/// paths inside someone's home directory, and an ungated resource that a peer
+/// may resolve over a transport has no business stating whose machine it is.
+/// A caller that wants the provenance holds the capability and sources
+/// `urn:a11y:config`.
+///
+/// **The projection is [`A11y::presentation`], and it is the only one.** A field
+/// added to [`A11y`] is withheld from this view until someone writes it in by
+/// hand — which is the safe direction for the default to point.
+///
+/// The residual, stated rather than papered over: a `contrast.min` of 7.0 is a
+/// weak signal that *someone* here wants AAA. It is a deployment posture, it is
+/// machine-wide rather than per-person, and anything that renders the page has to
+/// be able to read it — so it is on the ungated side, and that is a judgement,
+/// not an oversight.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Presentation {
+    /// Syntax themes per colour scheme.
+    pub theme: Theme,
+    /// Contrast floors.
+    pub contrast: Contrast,
+    /// Whether links carry an underline rather than relying on colour alone
+    /// (WCAG 1.4.1) — a property of the artifact, not of the reader.
+    pub underline_links: bool,
+}
+
+/// The serialization shape of a [`Presentation`]: nested exactly as `a11y.toml`
+/// nests it, so the TOML face is a **valid config file** — a subset of one, with
+/// every key in the place an operator would write it.
+#[derive(Serialize)]
+struct PresentationWire<'a> {
+    theme: &'a Theme,
+    contrast: &'a Contrast,
+    text: PresentationText,
+}
+
+/// The `[text]` keys the presentation view states. A struct rather than a bare
+/// key so the TOML face keeps the section.
+#[derive(Serialize)]
+struct PresentationText {
+    underline_links: bool,
+}
+
+impl Default for Presentation {
+    /// The built-in defaults, projected — so the two views cannot drift on what
+    /// "no config at all" means.
+    ///
+    /// A consumer needs this: a machine with no config home has not
+    /// misconfigured anything, and a stylesheet is the wrong place to discover
+    /// it has nowhere to configure. `ikigai-browse` already makes exactly that
+    /// call.
+    fn default() -> Self {
+        A11y::default().presentation()
+    }
+}
+
+impl Presentation {
+    /// The wire shape, borrowed.
+    fn wire(&self) -> PresentationWire<'_> {
+        PresentationWire {
+            theme: &self.theme,
+            contrast: &self.contrast,
+            text: PresentationText {
+                underline_links: self.underline_links,
+            },
+        }
+    }
+
+    /// The `text/plain` (and TOML) face — a valid `a11y.toml` subset, so an
+    /// operator can paste it into one.
+    pub fn to_toml(&self) -> String {
+        toml::to_string_pretty(&self.wire())
+            .expect("the presentation view is representable as TOML")
+    }
+
+    /// The `application/json` face.
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(&self.wire()).expect("the presentation view is JSON")
+    }
+
+    /// The `text/turtle` face: a skolemized graph on the presentation
+    /// resource's own IRI.
+    ///
+    /// The subject is `urn:a11y:presentation` (or `…:{app}`), **never** the
+    /// config's, because the two resources make different claims about the same
+    /// machine and must not merge into one node. On this subject an absent
+    /// `ik:reduceMotion` means **withheld**, not unstated — a reader that needs
+    /// to tell those apart holds `urn:cap:a11y:read` and sources
+    /// `urn:a11y:config`, where absence means what it says.
+    pub fn to_turtle(&self, subject: &str, app: Option<&str>) -> String {
+        let mut out = String::new();
+        out.push_str("@prefix ik: <https://ikigai-rs.dev/ns#> .\n");
+        out.push_str("@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\n");
+        out.push_str(&format!("<{subject}> a ik:AccessibilityConfig ;\n"));
+        if let Some(app) = app {
+            out.push_str(&format!("    ik:app \"{}\" ;\n", escape(app)));
+        }
+        out.push_str(&format!(
+            "    ik:themeLight \"{}\" ;\n",
+            escape(&self.theme.light)
+        ));
+        out.push_str(&format!(
+            "    ik:themeDark \"{}\" ;\n",
+            escape(&self.theme.dark)
+        ));
+        out.push_str(&format!(
+            "    ik:contrastMin {} ;\n",
+            decimal(self.contrast.min)
+        ));
+        out.push_str(&format!(
+            "    ik:contrastMinLarge {} ;\n",
+            decimal(self.contrast.min_large)
+        ));
+        out.push_str(&format!(
+            "    ik:underlineLinks {} .\n",
+            self.underline_links
+        ));
         out
     }
 }
@@ -821,6 +986,92 @@ mod tests {
             2,
             "every contributing file is derived-from, whatever its role: {ttl}"
         );
+    }
+
+    /// The projection keeps every rendering fact and drops every person-fact —
+    /// the one place the sensitivity line is drawn, so the one place to pin it.
+    #[test]
+    fn the_presentation_view_keeps_the_rendering_facts_and_drops_the_person_facts() {
+        let effective = A11y::merged([&Patch::parse(
+            "[theme]\ndark = \"Nord\"\n[contrast]\nmin = 7.0\n[motion]\nreduce = true\n\
+             [text]\nscale = 1.75\nunderline_links = false\n",
+            None,
+        )
+        .unwrap()]);
+        let rendering = effective.presentation();
+        assert_eq!(rendering.theme.dark, "Nord");
+        assert_eq!(rendering.contrast.min, 7.0);
+        assert_eq!(rendering.contrast.min_large, DEFAULT_MIN_LARGE);
+        assert!(!rendering.underline_links);
+    }
+
+    /// Every face of the ungated view, checked for the two facts it exists to
+    /// withhold. `text.scale` is the sharpest of them: a scale of 1.75 is a
+    /// statement about someone's eyesight.
+    #[test]
+    fn no_face_of_the_presentation_view_can_state_a_person_fact() {
+        let effective =
+            A11y::merged([
+                &Patch::parse("[motion]\nreduce = true\n[text]\nscale = 1.75\n", None).unwrap(),
+            ]);
+        let rendering = effective.presentation();
+        for face in [
+            rendering.to_toml(),
+            rendering.to_json(),
+            rendering.to_turtle("urn:a11y:presentation", Some("cms-web")),
+        ] {
+            assert!(!face.contains("reduce"), "{face}");
+            assert!(!face.contains("scale"), "{face}");
+            assert!(!face.contains("1.75"), "{face}");
+        }
+    }
+
+    /// "No config at all" must mean the same thing in both views, or a machine
+    /// with no config home would render differently depending on which one a
+    /// consumer happened to read.
+    #[test]
+    fn the_two_views_agree_on_what_no_config_means() {
+        assert_eq!(Presentation::default(), A11y::default().presentation());
+        assert_eq!(Presentation::default().theme, A11y::default().theme);
+        assert_eq!(Presentation::default().contrast, A11y::default().contrast);
+        assert!(Presentation::default().underline_links);
+    }
+
+    /// The TOML face is a valid `a11y.toml` — a subset of one, with every key
+    /// where an operator writes it. That is what makes it a usable starting
+    /// point rather than a report about a config.
+    #[test]
+    fn the_presentation_toml_face_is_a_config_file() {
+        let mut effective = A11y::default();
+        effective.contrast.min = 7.0;
+        let text = effective.presentation().to_toml();
+        let reparsed = A11y::merged([&Patch::parse(&text, None).expect("a valid a11y.toml")]);
+        assert_eq!(reparsed.contrast.min, 7.0);
+        assert_eq!(reparsed.theme, effective.theme);
+        assert_eq!(
+            reparsed.text.underline_links,
+            effective.text.underline_links
+        );
+    }
+
+    /// The graph face is skolemized on the PRESENTATION resource's own IRI, not
+    /// the config's. Sharing a subject would merge a withheld property with an
+    /// unstated one the moment a reader unioned the two graphs.
+    #[test]
+    fn the_presentation_graph_is_a_subject_of_its_own() {
+        let ttl = A11y::default()
+            .presentation()
+            .to_turtle("urn:a11y:presentation:cms-web", Some("cms-web"));
+        assert!(!ttl.contains("_:"), "no blank nodes: {ttl}");
+        assert!(ttl.contains("<urn:a11y:presentation:cms-web> a ik:AccessibilityConfig"));
+        assert!(ttl.contains("ik:app \"cms-web\""));
+        assert!(ttl.contains("ik:contrastMin 4.5"), "{ttl}");
+        assert!(ttl.contains("ik:underlineLinks true"), "{ttl}");
+        // No provenance: an ungated resource states nothing about whose machine
+        // this is, and layer paths are absolute paths in someone's home.
+        assert!(!ttl.contains("prov:"), "{ttl}");
+        assert!(!ttl.contains("urn:file:"), "{ttl}");
+        assert!(ttl.trim_end().ends_with('.'));
     }
 
     #[test]
