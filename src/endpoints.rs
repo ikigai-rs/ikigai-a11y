@@ -1,6 +1,6 @@
 //! The `urn:a11y:*` endpoints.
 //!
-//! ## Two actions, one capability between them
+//! ## Three actions, one capability between them
 //!
 //! `urn:a11y:config` requires — and enforces — [`CAP_READ`]. It is tempting to
 //! call theme preferences public, but this config also states whether the person
@@ -8,18 +8,46 @@
 //! assistive-technology information about a human being, not decoration. It is
 //! gated for the same reason calendar detail is.
 //!
+//! `urn:a11y:presentation` requires **nothing**, and serves the rendering half
+//! of the same config: themes, contrast floors, link underlining — the
+//! deployment's posture about how a page is drawn, with everything about the
+//! reader withheld. It is this module's `urn:personal:availability`: a separate
+//! IRI serving the minimized view at the lower authority, so the caller that
+//! only needs to draw something never has to be handed the rest.
+//!
 //! `urn:a11y:contrast` requires **nothing**, because it computes a WCAG ratio
 //! from two colours the caller already holds. Declaring a capability it does not
 //! need would make the manifold under-offer — an agent holding no a11y grant
 //! would be told it cannot do arithmetic.
 //!
-//! That split is why `urn:a11y:contrast` takes an explicit `min` (defaulting to
-//! the WCAG AA constant) rather than reading the configured floor itself. An
-//! action whose capability requirement depends on WHICH arguments arrive cannot
-//! be described: `requires` is per-action, so the manifold would have to declare
-//! the union (over-demanding for the pure call) or the intersection (a lie for
-//! the config-reading one). A caller wanting the configured floor sources
-//! `urn:a11y:config` — one cached read — and passes it in.
+//! ## Why the minimized view is a second IRI, not a face
+//!
+//! `as=` cannot carry it. An action whose capability requirement depends on
+//! WHICH arguments arrive cannot be described: `requires` is per-action, so the
+//! manifold would have to declare the union (over-demanding for the ungated
+//! call) or the intersection (a lie for the gated one). The same constraint is
+//! why `urn:a11y:contrast` takes an explicit `min` rather than reading the
+//! configured floor itself — a caller wanting the deployment's floor sources it
+//! and passes it in.
+//!
+//! So authority that differs becomes an action that differs. The alternative —
+//! one IRI declaring no capability and silently redacting for callers who hold
+//! none — trades a name a caller can see for a difference they cannot, on a
+//! resource whose entire job is to be authoritative.
+//!
+//! ## What the capability protects
+//!
+//! The **resource**, not the files. A capability is checked when the kernel
+//! resolves an IRI; nothing checks one when a linked library reads `a11y.toml`
+//! with `std::fs`, and nothing could. That is the shape of the thing rather than
+//! a hole: the gate is the only fence that exists for an agent's manifold, a peer
+//! across a transport, or an MCP projection, and in-process the host is already
+//! reading this person's home directory.
+//!
+//! Which is why [`crate::load`] offers the split too — `presentation` for a
+//! consumer deriving an artifact, `complete` for whatever is entitled to the
+//! whole thing. The gate stays meaningful because the ungated path leads
+//! somewhere harmless, not because it has been closed.
 //!
 //! ## Cacheability
 //!
@@ -52,6 +80,12 @@ pub const CONFIG_IRI: &str = "urn:a11y:config";
 /// The per-application effective config.
 #[cfg(not(target_family = "wasm"))]
 pub const CONFIG_TEMPLATE: &str = "urn:a11y:config:{app}";
+/// The shared rendering half — ungated.
+#[cfg(not(target_family = "wasm"))]
+pub const PRESENTATION_IRI: &str = "urn:a11y:presentation";
+/// The per-application rendering half — ungated.
+#[cfg(not(target_family = "wasm"))]
+pub const PRESENTATION_TEMPLATE: &str = "urn:a11y:presentation:{app}";
 /// The WCAG contrast calculator.
 pub const CONTRAST_IRI: &str = "urn:a11y:contrast";
 
@@ -99,7 +133,7 @@ fn config_impl(inv: &Invocation<'_>) -> Result<Representation> {
         )));
     }
     let app = inv.bindings.get("app");
-    let effective = crate::load::load(app).map_err(config_error)?;
+    let effective = crate::load::complete(app).map_err(config_error)?;
     let subject = match app {
         Some(app) => format!("{CONFIG_IRI}:{app}"),
         None => CONFIG_IRI.to_string(),
@@ -138,6 +172,75 @@ pub fn config() -> FnEndpoint {
             .verb(Verb::Source)
             .verb(Verb::Meta)
             .requires(CAP_READ)
+            .input(
+                ArgSpec::new("app")
+                    .summary(
+                        "the application whose override layer applies (the PROCESS's name: \
+                         cms-web, dev-server, web), captured from the IRI",
+                    )
+                    .class(XSD_STRING)
+                    .binding()
+                    .optional(),
+            )
+            .input(
+                ArgSpec::new("as")
+                    .summary("the face: TOML by default, or JSON, or the skolemized graph")
+                    .class(XSD_STRING)
+                    .one_of([TEXT_PLAIN, JSON, TURTLE])
+                    .default_value(TEXT_PLAIN),
+            )
+            .output(TEXT_PLAIN)
+            .output(JSON)
+            .output(TURTLE),
+    )
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn presentation_impl(inv: &Invocation<'_>) -> Result<Representation> {
+    // No capability check, and that is the contract: this action declares none,
+    // and what it can reach is bounded by the projection rather than by a gate.
+    let app = inv.bindings.get("app");
+    let rendering = crate::load::presentation(app).map_err(config_error)?;
+    let subject = match app {
+        Some(app) => format!("{PRESENTATION_IRI}:{app}"),
+        None => PRESENTATION_IRI.to_string(),
+    };
+    let (repr_type, body) = match face(inv)? {
+        JSON => (ReprType::new(JSON), rendering.to_json()),
+        TURTLE => (
+            ReprType::new("text/turtle").with_param("charset", "utf-8"),
+            rendering.to_turtle(&subject, app),
+        ),
+        _ => (plain(), rendering.to_toml()),
+    };
+    // Same files, same threads as the gated resource: the two views are cached
+    // separately and invalidated together.
+    let mut repr = Representation::new(repr_type, body.into_bytes()).cacheable();
+    for thread in crate::load::threads(app).map_err(config_error)? {
+        repr = repr.depends_on(thread);
+    }
+    Ok(repr)
+}
+
+/// `urn:a11y:presentation` / `urn:a11y:presentation:{app}` — the rendering half
+/// of the effective config, ungated.
+#[cfg(not(target_family = "wasm"))]
+pub fn presentation() -> FnEndpoint {
+    FnEndpoint::new("a11yPresentation", presentation_impl).with_description(
+        Description::new("a11yPresentation")
+            .title("Effective accessibility config: the rendering half")
+            .summary(
+                "How this deployment draws a page — the configured light and dark themes, both \
+                 WCAG contrast floors, and whether links are underlined — merged over the same \
+                 layers as urn:a11y:config (defaults ⊕ a11y.toml ⊕ {app}.a11y.toml). Requires no \
+                 capability, and states NOTHING about the person reading: reduced-motion and \
+                 text-scale preferences are assistive-technology facts about a human being and \
+                 live on urn:a11y:config, behind urn:cap:a11y:read. This is what a consumer \
+                 deriving a stylesheet or a palette should read. as=application/json or \
+                 as=text/turtle for the machine faces.",
+            )
+            .verb(Verb::Source)
+            .verb(Verb::Meta)
             .input(
                 ArgSpec::new("app")
                     .summary(
@@ -263,10 +366,18 @@ pub fn contrast() -> FnEndpoint {
 pub fn space() -> EndpointSpace {
     let space = EndpointSpace::new().bind(Exact::new(CONTRAST_IRI), contrast());
     #[cfg(not(target_family = "wasm"))]
-    let space = space.bind(Exact::new(CONFIG_IRI), config()).bind(
-        UriTemplate::parse(CONFIG_TEMPLATE).expect("CONFIG_TEMPLATE is a valid template"),
-        config(),
-    );
+    let space = space
+        .bind(Exact::new(CONFIG_IRI), config())
+        .bind(
+            UriTemplate::parse(CONFIG_TEMPLATE).expect("CONFIG_TEMPLATE is a valid template"),
+            config(),
+        )
+        .bind(Exact::new(PRESENTATION_IRI), presentation())
+        .bind(
+            UriTemplate::parse(PRESENTATION_TEMPLATE)
+                .expect("PRESENTATION_TEMPLATE is a valid template"),
+            presentation(),
+        );
     space
 }
 
@@ -277,11 +388,15 @@ pub fn configurable_themes() -> Vec<&'static str> {
 }
 
 /// The effective config as a value, for a host that wants the struct rather than
-/// a representation. Kept here beside the endpoint so both agree on which layers
-/// are consulted.
+/// a representation.
 #[cfg(not(target_family = "wasm"))]
+#[deprecated(
+    since = "0.2.0",
+    note = "one door per view, and each named for what it hands over: \
+            `load::presentation` for the rendering half, `load::complete` for the whole config"
+)]
 pub fn effective(app: Option<&str>) -> Result<A11y> {
-    crate::load::load(app).map_err(config_error)
+    crate::load::complete(app).map_err(config_error)
 }
 
 #[cfg(test)]
@@ -399,6 +514,59 @@ mod tests {
         }
     }
 
+    /// The ungated resource is reachable holding nothing at all, and what it
+    /// serves is bounded by the projection rather than by a check. Both halves
+    /// matter: a caller with no grant gets the themes and the floors, and no
+    /// caller — grant or no grant — gets the person-facts from this IRI.
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn the_presentation_endpoint_needs_no_capability_and_withholds_the_person_facts() {
+        assert!(
+            presentation().describe().requires.is_empty(),
+            "an ungated action must not claim a capability it never checks"
+        );
+        let nothing = Capability::scoped(Vec::<String>::new());
+        let request = Request::new(Verb::Source, iri(PRESENTATION_IRI))
+            .with_arg("as", ArgRef::Inline(JSON.as_bytes().to_vec()));
+        let Ok(rep) = invoke(&presentation(), request, &nothing) else {
+            return; // no config home on this machine; the loader said so
+        };
+        let json: serde_json::Value =
+            serde_json::from_slice(&rep.bytes).expect("the JSON face is JSON");
+        assert!(json["theme"]["dark"].is_string());
+        assert!(json["contrast"]["min"].is_number());
+        assert!(json["text"]["underline_links"].is_boolean());
+        assert!(json["motion"].is_null(), "{json}");
+        assert!(json["text"].get("scale").is_none(), "{json}");
+    }
+
+    /// The two views are separate resources with separate names, because
+    /// authority that differs cannot ride on an argument — and the graph faces
+    /// carry separate subjects, so a reader unioning them never merges a
+    /// withheld property with an unstated one.
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn the_two_views_are_distinct_subjects_under_distinct_capabilities() {
+        let cap = Capability::scoped([CAP_READ]);
+        let turtle = |ep: &FnEndpoint, subject: &str| {
+            let request = Request::new(Verb::Source, iri(subject))
+                .with_arg("as", ArgRef::Inline(TURTLE.as_bytes().to_vec()));
+            invoke(ep, request, &cap).map(|rep| String::from_utf8_lossy(&rep.bytes).to_string())
+        };
+        let (Ok(gated), Ok(open)) = (
+            turtle(&config(), CONFIG_IRI),
+            turtle(&presentation(), PRESENTATION_IRI),
+        ) else {
+            return; // no config home on this machine
+        };
+        assert!(gated.contains(&format!("<{CONFIG_IRI}> a ik:AccessibilityConfig")));
+        assert!(open.contains(&format!("<{PRESENTATION_IRI}> a ik:AccessibilityConfig")));
+        assert!(
+            !open.contains("prov:wasDerivedFrom"),
+            "the ungated graph names no host paths: {open}"
+        );
+    }
+
     /// The result is CACHEABLE and carries a thread per candidate file. This is
     /// the property the whole design turns on: an uncacheable config would make
     /// every stylesheet that joined it uncacheable too.
@@ -436,17 +604,43 @@ mod tests {
         assert!(configurable_themes().contains(&"Base16OceanDark"));
     }
 
-    /// The space binds what a host will actually resolve — both config spellings
-    /// and the calculator.
+    /// The space binds what a host will actually resolve — both spellings of
+    /// both views, and the calculator.
     #[cfg(not(target_family = "wasm"))]
     #[test]
-    fn the_space_binds_all_three_identifiers() {
+    fn the_space_binds_every_identifier() {
         use ikigai_core::Space;
         let entries = space().entries().expect("an EndpointSpace enumerates");
         let patterns: Vec<&str> = entries.iter().map(|e| e.pattern.as_str()).collect();
-        assert!(patterns.contains(&CONTRAST_IRI), "{patterns:?}");
-        assert!(patterns.contains(&CONFIG_IRI), "{patterns:?}");
-        assert!(patterns.contains(&CONFIG_TEMPLATE), "{patterns:?}");
+        for expected in [
+            CONTRAST_IRI,
+            CONFIG_IRI,
+            CONFIG_TEMPLATE,
+            PRESENTATION_IRI,
+            PRESENTATION_TEMPLATE,
+        ] {
+            assert!(patterns.contains(&expected), "{expected}: {patterns:?}");
+        }
+    }
+
+    /// The `{app}` binding reaches the ungated view too — an operator's
+    /// `cms-web.a11y.toml` theme override must apply to the resource the
+    /// stylesheet actually reads, or the override silently does nothing.
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn the_app_binding_reaches_the_ungated_view_through_the_kernel() {
+        use std::sync::Arc;
+        let kernel = ikigai_core::Kernel::new(Arc::new(space()));
+        let nothing = Capability::scoped(Vec::<String>::new());
+        let request = Request::new(Verb::Source, iri("urn:a11y:presentation:cms-web"))
+            .with_arg("as", ArgRef::Inline(TURTLE.as_bytes().to_vec()));
+        let Ok(rep) = block_on(kernel.issue(request, &nothing)) else {
+            return; // no config home on this machine
+        };
+        let ttl = String::from_utf8_lossy(&rep.bytes);
+        assert!(ttl.contains("<urn:a11y:presentation:cms-web>"), "{ttl}");
+        assert!(ttl.contains("ik:app \"cms-web\""), "{ttl}");
+        assert_eq!(rep.threads().len(), 2, "{:?}", rep.threads());
     }
 
     /// End to end through a real kernel: the `{app}` binding reaches the

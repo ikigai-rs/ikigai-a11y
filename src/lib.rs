@@ -5,11 +5,30 @@
 //! and control plane can reuse rather than re-deriving per front end.
 //!
 //! ```text
-//! source urn:a11y:config:cms-web              # the EFFECTIVE merged config
+//! source urn:a11y:config:cms-web              # the EFFECTIVE merged config (gated)
+//! source urn:a11y:presentation:cms-web        # the rendering half of it (ungated)
 //! source urn:a11y:config as=text/turtle       # the skolemized graph face
 //! source urn:a11y:contrast from=#323232 on=#2b303b
 //! → 1.03 fail
 //! ```
+//!
+//! ## ★ The rule a consumer inherits
+//!
+//! **Deriving an artifact — a stylesheet, a palette, a page? Read
+//! [`load::presentation`] (or `urn:a11y:presentation`).** It gives you the
+//! themes, both contrast floors and whether links are underlined, and it cannot
+//! give you anything about the person at the keyboard.
+//!
+//! [`load::complete`] and `urn:a11y:config` serve the whole config, reduced-motion
+//! and text-scale included. Those are assistive-technology facts about a human
+//! being; `urn:cap:a11y:read` gates the resource, and the two callers entitled to
+//! the library call are whatever serves that resource and a process configuring
+//! itself for the user it runs as.
+//!
+//! A capability gates resolution through the kernel; it cannot gate a Rust
+//! function call, and no library could make it. So the crate does the thing a
+//! library can do — it makes the ungated path lead somewhere harmless. See
+//! [`load`]'s module docs for the whole argument.
 //!
 //! ## The three pieces
 //!
@@ -61,9 +80,13 @@ pub mod themes;
 
 pub use color::{ratio, ParseColorError, Rgba};
 pub use config::{
-    canonical_theme, A11y, ConfigError, Contrast, Motion, Patch, Text, Theme, THEMES,
+    canonical_theme, A11y, ConfigError, Contrast, Motion, Patch, Presentation, Text, Theme, THEMES,
 };
 pub use css::{apply_floor, FloorPass, Lift};
+#[allow(deprecated)] // `effective` is re-exported for the consumers that pinned it
 #[cfg(not(target_family = "wasm"))]
-pub use endpoints::{config, effective, CONFIG_IRI, CONFIG_TEMPLATE};
+pub use endpoints::{
+    config, effective, presentation, CONFIG_IRI, CONFIG_TEMPLATE, PRESENTATION_IRI,
+    PRESENTATION_TEMPLATE,
+};
 pub use endpoints::{configurable_themes, contrast, space, CAP_READ, CONTRAST_IRI};

@@ -77,7 +77,7 @@ fn config_endpoint(home: PathBuf, cacheable: bool) -> FnEndpoint {
     FnEndpoint::new(
         "config",
         move |_inv: &Invocation<'_>| -> Result<Representation> {
-            let effective = ikigai_a11y::load::load_in(&home, Some("cms-web"))
+            let effective = ikigai_a11y::load::complete_in(&home, Some("cms-web"))
                 .map_err(|e| ikigai_core::Error::Endpoint(e.to_string()))?;
             let repr = Representation::new(
                 ReprType::new("text/plain"),
