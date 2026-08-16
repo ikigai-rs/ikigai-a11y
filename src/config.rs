@@ -632,6 +632,19 @@ struct PresentationText {
     underline_links: bool,
 }
 
+impl Default for Presentation {
+    /// The built-in defaults, projected — so the two views cannot drift on what
+    /// "no config at all" means.
+    ///
+    /// A consumer needs this: a machine with no config home has not
+    /// misconfigured anything, and a stylesheet is the wrong place to discover
+    /// it has nowhere to configure. `ikigai-browse` already makes exactly that
+    /// call.
+    fn default() -> Self {
+        A11y::default().presentation()
+    }
+}
+
 impl Presentation {
     /// The wire shape, borrowed.
     fn wire(&self) -> PresentationWire<'_> {
@@ -1011,6 +1024,17 @@ mod tests {
             assert!(!face.contains("scale"), "{face}");
             assert!(!face.contains("1.75"), "{face}");
         }
+    }
+
+    /// "No config at all" must mean the same thing in both views, or a machine
+    /// with no config home would render differently depending on which one a
+    /// consumer happened to read.
+    #[test]
+    fn the_two_views_agree_on_what_no_config_means() {
+        assert_eq!(Presentation::default(), A11y::default().presentation());
+        assert_eq!(Presentation::default().theme, A11y::default().theme);
+        assert_eq!(Presentation::default().contrast, A11y::default().contrast);
+        assert!(Presentation::default().underline_links);
     }
 
     /// The TOML face is a valid `a11y.toml` — a subset of one, with every key
