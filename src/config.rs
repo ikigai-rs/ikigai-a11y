@@ -90,6 +90,15 @@ pub fn canonical_theme(name: &str) -> Option<&'static str> {
         .map(|(id, _)| *id)
 }
 
+/// The config file stem every ikigai front end layers: `a11y.toml` shared, and
+/// `{app}.a11y.toml` as one application's override.
+///
+/// It lives in this (pure, wasm-clean) module rather than beside the loader
+/// because [`A11y::to_turtle`] needs it to tell a shared layer from an app one,
+/// and [`crate::load`] does not exist on wasm. The loader re-exports it, so
+/// `load::STEM` still resolves for native callers.
+pub const STEM: &str = "a11y.toml";
+
 /// The default light theme — what `ikigai-browse` hard-codes today, so adopting
 /// a config file changes nothing until an operator writes one.
 pub const DEFAULT_LIGHT: &str = "InspiredGithub";
@@ -470,13 +479,30 @@ impl A11y {
     ///
     /// `subject` is the resource's own IRI (`urn:a11y:config`, or
     /// `urn:a11y:config:{app}`), so the graph is diffable against another host's
-    /// and unionable with the rest of a catalog. Contributing files appear as
-    /// `ik:layer` links to their `urn:file:` IRIs — the same IRIs this crate
-    /// names its golden threads after, so a reader can see what would invalidate
-    /// the answer.
+    /// and unionable with the rest of a catalog.
+    ///
+    /// Contributing files are named twice, deliberately:
+    ///
+    /// - **`prov:wasDerivedFrom`** — the standard fact, one triple per file, so
+    ///   any PROV-aware reader gets the provenance without knowing this
+    ///   vocabulary at all.
+    /// - **`ik:sharedLayer` / `ik:appLayer`** — the same files by ROLE, because
+    ///   RDF triples are unordered and the role is what answers "why is the
+    ///   floor 7.0?". A bare repeated property would lose precedence exactly
+    ///   where it is being asked for: with two layers each stating
+    ///   `contrast.min`, an unordered set cannot say which one won.
+    ///
+    /// The role is taken from the FILE NAME, never from position in
+    /// [`A11y::layers`], which holds only the files that exist — when the shared
+    /// file is absent, the app override is at index 0.
+    ///
+    /// Both point at `urn:file:` IRIs: the same ones this crate names its golden
+    /// threads after, so the graph shows what would invalidate the answer as
+    /// well as what produced it.
     pub fn to_turtle(&self, subject: &str, app: Option<&str>) -> String {
         let mut out = String::new();
         out.push_str("@prefix ik: <https://ikigai-rs.dev/ns#> .\n");
+        out.push_str("@prefix prov: <http://www.w3.org/ns/prov#> .\n");
         out.push_str("@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\n");
         out.push_str(&format!("<{subject}> a ik:AccessibilityConfig ;\n"));
         if let Some(app) = app {
@@ -510,7 +536,9 @@ impl A11y {
             self.text.underline_links
         ));
         for layer in &self.layers {
-            out.push_str(&format!(";\n    ik:layer <{}> ", file_iri(layer)));
+            let iri = file_iri(layer);
+            out.push_str(&format!(";\n    prov:wasDerivedFrom <{iri}> "));
+            out.push_str(&format!(";\n    {} <{iri}> ", layer_role(layer)));
         }
         out.push_str(".\n");
         out
@@ -521,6 +549,21 @@ impl A11y {
 /// changes (see [`crate::load::threads`]).
 pub fn file_iri(path: &std::path::Path) -> String {
     format!("urn:file:{}", path.display())
+}
+
+/// Which role a contributing file plays, as the property naming it in the Turtle
+/// face: `ik:sharedLayer` for the machine-wide `a11y.toml`, `ik:appLayer` for a
+/// `{app}.a11y.toml` override.
+///
+/// Decided by FILE NAME, not by position. [`A11y::layers`] holds only the files
+/// that exist, so when the shared file is absent the app override sits at index
+/// 0 and an index-based rule would mislabel it — silently, and in the one field
+/// whose entire job is explaining precedence.
+fn layer_role(path: &std::path::Path) -> &'static str {
+    match path.file_name().and_then(|n| n.to_str()) {
+        Some(name) if name == STEM => "ik:sharedLayer",
+        _ => "ik:appLayer",
+    }
 }
 
 /// A theme name in its canonical spelling; unknown names are left as written,
@@ -721,12 +764,63 @@ mod tests {
             "a decimal keeps its point: {ttl}"
         );
         assert!(ttl.contains("ik:reduceMotion true"));
-        assert!(ttl.contains("ik:layer <urn:file:/cfg/ikigai/a11y.toml>"));
+        assert!(ttl.contains("@prefix prov: <http://www.w3.org/ns/prov#> ."));
+        // Named twice: the standard fact for any PROV reader, and the role that
+        // carries precedence RDF's unordered triples otherwise lose.
+        assert!(ttl.contains("prov:wasDerivedFrom <urn:file:/cfg/ikigai/a11y.toml>"));
+        assert!(ttl.contains("ik:sharedLayer <urn:file:/cfg/ikigai/a11y.toml>"));
         assert!(ttl.trim_end().ends_with('.'));
         // An unstated preference emits no triple rather than a false one.
         let quiet = A11y::default().to_turtle("urn:a11y:config", None);
         assert!(!quiet.contains("ik:reduceMotion"), "{quiet}");
         assert!(!quiet.contains("ik:app"), "{quiet}");
+    }
+
+    /// The layer ROLE comes from the file name, never from position — the whole
+    /// reason `layer_role` exists. `layers` holds only the files that EXIST, so
+    /// when the machine-wide file is absent the app override sits at index 0,
+    /// and an index-based rule would publish it as the shared layer: a wrong
+    /// answer in the one field whose entire job is explaining precedence.
+    #[test]
+    fn the_layer_role_follows_the_file_name_not_the_position() {
+        // App override alone, at index 0.
+        let only_app = A11y {
+            layers: vec![PathBuf::from("/cfg/ikigai/cms-web.a11y.toml")],
+            ..Default::default()
+        };
+        let ttl = only_app.to_turtle("urn:a11y:config:cms-web", Some("cms-web"));
+        assert!(
+            ttl.contains("ik:appLayer <urn:file:/cfg/ikigai/cms-web.a11y.toml>"),
+            "an override at index 0 is still the app layer: {ttl}"
+        );
+        assert!(
+            !ttl.contains("ik:sharedLayer"),
+            "there is no shared layer to claim: {ttl}"
+        );
+
+        // Both layers: each takes its own role, and each is also stated the
+        // standard way for a reader that knows PROV and not this vocabulary.
+        let both = A11y {
+            layers: vec![
+                PathBuf::from("/cfg/ikigai/a11y.toml"),
+                PathBuf::from("/cfg/ikigai/cms-web.a11y.toml"),
+            ],
+            ..Default::default()
+        };
+        let ttl = both.to_turtle("urn:a11y:config:cms-web", Some("cms-web"));
+        assert!(
+            ttl.contains("ik:sharedLayer <urn:file:/cfg/ikigai/a11y.toml>"),
+            "{ttl}"
+        );
+        assert!(
+            ttl.contains("ik:appLayer <urn:file:/cfg/ikigai/cms-web.a11y.toml>"),
+            "{ttl}"
+        );
+        assert_eq!(
+            ttl.matches("prov:wasDerivedFrom").count(),
+            2,
+            "every contributing file is derived-from, whatever its role: {ttl}"
+        );
     }
 
     #[test]
