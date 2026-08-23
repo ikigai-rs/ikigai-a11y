@@ -125,8 +125,12 @@ fn face(inv: &Invocation<'_>) -> Result<&'static str> {
 
 #[cfg(not(target_family = "wasm"))]
 fn config_impl(inv: &Invocation<'_>) -> Result<Representation> {
-    // Declared = enforced. The manifold says this action needs CAP_READ; this is
-    // where that stops being a claim.
+    // Declared = enforced — but the kernel is what makes it so: it refuses a caller
+    // without CAP_READ before dispatch and before any cache-serve (core 0.1.49
+    // onward), so under a kernel this check never fires. It is the second line, and
+    // it earns its keep on the paths where no kernel gate ran — a detached
+    // invocation, a module shim, or (see `crate::load`) a linked library calling in
+    // as plain Rust, where nothing resolves an IRI and nothing checks a capability.
     if !inv.capability.allows(CAP_READ) {
         return Err(Error::Denied(format!(
             "reading the accessibility config requires `{CAP_READ}`"
