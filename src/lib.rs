@@ -75,6 +75,8 @@ pub mod css;
 mod endpoints;
 #[cfg(not(target_family = "wasm"))]
 pub mod load;
+#[cfg(all(test, not(target_family = "wasm")))]
+mod scratch;
 #[cfg(feature = "themes")]
 pub mod themes;
 
@@ -86,7 +88,7 @@ pub use css::{apply_floor, FloorPass, Lift};
 #[allow(deprecated)] // `effective` is re-exported for the consumers that pinned it
 #[cfg(not(target_family = "wasm"))]
 pub use endpoints::{
-    config, effective, presentation, CONFIG_IRI, CONFIG_TEMPLATE, PRESENTATION_IRI,
-    PRESENTATION_TEMPLATE,
+    config, config_with, effective, presentation, presentation_with, space_with, A11yHandle,
+    CONFIG_IRI, CONFIG_TEMPLATE, PRESENTATION_IRI, PRESENTATION_TEMPLATE,
 };
 pub use endpoints::{configurable_themes, contrast, space, CAP_READ, CONTRAST_IRI};

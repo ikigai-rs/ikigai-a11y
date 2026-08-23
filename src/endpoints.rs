@@ -58,6 +58,11 @@
 //! joined it would silently stop being cached too.
 
 #[cfg(not(target_family = "wasm"))]
+use std::path::{Path, PathBuf};
+#[cfg(not(target_family = "wasm"))]
+use std::sync::Arc;
+
+#[cfg(not(target_family = "wasm"))]
 use ikigai_core::UriTemplate;
 use ikigai_core::{
     ArgSpec, Description, EndpointSpace, Error, Exact, FnEndpoint, Invocation, ReprType,
@@ -67,7 +72,7 @@ use ikigai_core::{
 use crate::color::{ratio, Rgba};
 use crate::config::theme_ids;
 #[cfg(not(target_family = "wasm"))]
-use crate::config::{A11y, ConfigError};
+use crate::config::{A11y, ConfigError, Presentation};
 
 /// The capability `urn:a11y:config` requires and enforces.
 pub const CAP_READ: &str = "urn:cap:a11y:read";
@@ -107,6 +112,129 @@ fn config_error(e: ConfigError) -> Error {
     Error::Endpoint(e.to_string())
 }
 
+/// This mount's accessibility config: the **config home** it layers within, and
+/// the application whose override layer applies when the IRI names none.
+///
+/// ## Why the endpoints need one
+///
+/// `config_home()` reads `$XDG_CONFIG_HOME` and `$HOME`, and both are
+/// process-global. An endpoint body that called it read the *developer's* real
+/// `~/.config/ikigai/a11y.toml` under `cargo test`, could not be handed a
+/// different one (`set_var` races the harness's own threads), and gave two tests
+/// in one binary no way to disagree — `cargo test` shares a process across a
+/// crate's tests. The measurable consequence was a suite that passed identically
+/// against three different configs including a **corrupt** one, because not one
+/// endpoint test owned the file its values came from.
+///
+/// So the home is taken here, once, by whoever mounts this space — a fact about
+/// the mount rather than a hidden input to a resolution. See
+/// `ikigai-core/docs/design/hermetic-endpoint-tests.md`; `ikigai-log`'s
+/// `LogHandle` is the reference implementation.
+///
+/// ## ★ It holds the home, NOT a parsed config
+///
+/// This is the one place the shape deliberately differs from `LogHandle`, which
+/// carries a parsed `LogConfig`. `urn:a11y:config` is `.cacheable()` with a
+/// golden thread on every candidate file, and the contract of that thread is
+/// that cutting it **recomputes** the answer. A handle that cached an [`A11y`]
+/// at construction would serve the config the process started with forever: the
+/// watcher would cut, the kernel would re-resolve, and the endpoint would hand
+/// back the same stale struct. The layering is cheap and the cache is the thing
+/// that makes it cheap to repeat, so the read stays per-resolution and the
+/// *home* is what gets held.
+///
+/// The log's config is process state that a Sink mutates in place, which is why
+/// holding it parsed is right there and wrong here.
+#[cfg(not(target_family = "wasm"))]
+pub struct A11yHandle {
+    home: Option<PathBuf>,
+    app: Option<String>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl A11yHandle {
+    /// A handle over a stated config home.
+    ///
+    /// `Option<PathBuf>`, not a fallible constructor: a process with no config
+    /// home is under-configured, not broken, and that is `config_home()`'s own
+    /// `None`-rather-than-a-guess contract carried up one level. The absence
+    /// becomes an error only when someone actually resolves a config IRI, where
+    /// it is `ConfigError::NoConfigHome` and says exactly what is missing.
+    ///
+    /// `app` is this mount's default application layer, per
+    /// `ambient-app-name.md`: optional, never guessed, and taken at mount time.
+    /// A `{app}` binding in the IRI still wins over it — see [`Self::layer`].
+    pub fn new(home: Option<PathBuf>, app: Option<String>) -> A11yHandle {
+        A11yHandle {
+            home,
+            app: app.filter(|a| !a.is_empty()),
+        }
+    }
+
+    /// A handle over **this machine's** config home — the sugar for a host
+    /// configuring itself from the environment it is running in.
+    ///
+    /// Sugar over [`new`](Self::new), never a second code path: the ambient read
+    /// happens here, once, and everything after it is the injected form with a
+    /// different argument.
+    ///
+    /// Infallible, unlike `LogHandle::ambient`, because nothing is parsed at
+    /// construction — an unreadable layer file surfaces at the resolution that
+    /// reads it, not at mount time.
+    pub fn ambient(app: Option<String>) -> A11yHandle {
+        A11yHandle::new(ikigai_core::config::config_home(), app)
+    }
+
+    /// The config home this handle layers within, or `None` if this process has
+    /// one that could not be determined.
+    pub fn home(&self) -> Option<&Path> {
+        self.home.as_deref()
+    }
+
+    /// This mount's default application layer.
+    pub fn app(&self) -> Option<&str> {
+        self.app.as_deref()
+    }
+
+    /// The application layer that applies to a request: the `{app}` captured
+    /// from the IRI if there was one, else this mount's own.
+    ///
+    /// The binding wins because it names a different RESOURCE —
+    /// `urn:a11y:config:cms-web` is not `urn:a11y:config` under a default, and a
+    /// mount whose default silently overrode the name in the IRI would serve one
+    /// resource's config under another's identity. This is the "explicit
+    /// argument wins over the ambient value" rule of `ambient-app-name.md`, with
+    /// the mount as the ambient side.
+    pub fn layer<'a>(&'a self, bound: Option<&'a str>) -> Option<&'a str> {
+        bound.filter(|a| !a.is_empty()).or_else(|| self.app())
+    }
+
+    fn rooted(&self) -> std::result::Result<&Path, ConfigError> {
+        self.home.as_deref().ok_or(ConfigError::NoConfigHome)
+    }
+
+    /// The whole effective config for `bound` (or this mount's app), read from
+    /// the held home. Person-facts included — see [`crate::load::complete`].
+    pub fn complete(&self, bound: Option<&str>) -> std::result::Result<A11y, ConfigError> {
+        crate::load::complete_in(self.rooted()?, self.layer(bound))
+    }
+
+    /// The rendering half of the same read — what a consumer deriving an
+    /// artifact wants.
+    pub fn presentation(
+        &self,
+        bound: Option<&str>,
+    ) -> std::result::Result<Presentation, ConfigError> {
+        crate::load::presentation_in(self.rooted()?, self.layer(bound))
+    }
+
+    /// The golden threads that read depends on: one per candidate file, whether
+    /// or not it exists.
+    pub fn threads(&self, bound: Option<&str>) -> std::result::Result<Vec<String>, ConfigError> {
+        Ok(crate::load::threads_in(self.rooted()?, self.layer(bound)))
+    }
+}
+
 /// The requested face, defaulting to `text/plain`. An unrecognised `as` is an
 /// error rather than a silent fallback: a caller that asked for JSON and got
 /// prose would notice much later than the caller who asked wrong.
@@ -124,7 +252,7 @@ fn face(inv: &Invocation<'_>) -> Result<&'static str> {
 }
 
 #[cfg(not(target_family = "wasm"))]
-fn config_impl(inv: &Invocation<'_>) -> Result<Representation> {
+fn config_impl(handle: &A11yHandle, inv: &Invocation<'_>) -> Result<Representation> {
     // Declared = enforced — but the kernel is what makes it so: it refuses a caller
     // without CAP_READ before dispatch and before any cache-serve (core 0.1.49
     // onward), so under a kernel this check never fires. It is the second line, and
@@ -137,7 +265,7 @@ fn config_impl(inv: &Invocation<'_>) -> Result<Representation> {
         )));
     }
     let app = inv.bindings.get("app");
-    let effective = crate::load::complete(app).map_err(config_error)?;
+    let effective = handle.complete(app).map_err(config_error)?;
     let subject = match app {
         Some(app) => format!("{CONFIG_IRI}:{app}"),
         None => CONFIG_IRI.to_string(),
@@ -146,23 +274,36 @@ fn config_impl(inv: &Invocation<'_>) -> Result<Representation> {
         JSON => (ReprType::new(JSON), effective.to_json()),
         TURTLE => (
             ReprType::new("text/turtle").with_param("charset", "utf-8"),
-            effective.to_turtle(&subject, app),
+            effective.to_turtle(&subject, handle.layer(app)),
         ),
         _ => (plain(), effective.to_toml()),
     };
     // Cacheable, with a thread on every CANDIDATE file — including the ones that
     // do not exist, so creating an override invalidates this too.
     let mut repr = Representation::new(repr_type, body.into_bytes()).cacheable();
-    for thread in crate::load::threads(app).map_err(config_error)? {
+    for thread in handle.threads(app).map_err(config_error)? {
         repr = repr.depends_on(thread);
     }
     Ok(repr)
 }
 
-/// `urn:a11y:config` / `urn:a11y:config:{app}` — the EFFECTIVE merged config.
+/// `urn:a11y:config` / `urn:a11y:config:{app}` over **this machine's** config
+/// home.
+///
+/// Sugar for [`config_with`] over [`A11yHandle::ambient`], and the entry point
+/// a host that is configuring itself from its own environment wants. A host
+/// serving someone else's config home — or a test that owns the files it is
+/// asserting about — builds the handle itself.
 #[cfg(not(target_family = "wasm"))]
 pub fn config() -> FnEndpoint {
-    FnEndpoint::new("a11yConfig", config_impl).with_description(
+    config_with(Arc::new(A11yHandle::ambient(None)))
+}
+
+/// `urn:a11y:config` / `urn:a11y:config:{app}` — the EFFECTIVE merged config,
+/// layered within the handle's config home.
+#[cfg(not(target_family = "wasm"))]
+pub fn config_with(handle: Arc<A11yHandle>) -> FnEndpoint {
+    FnEndpoint::new("a11yConfig", move |inv| config_impl(&handle, inv)).with_description(
         Description::new("a11yConfig")
             .title("Effective accessibility config")
             .summary(
@@ -200,11 +341,11 @@ pub fn config() -> FnEndpoint {
 }
 
 #[cfg(not(target_family = "wasm"))]
-fn presentation_impl(inv: &Invocation<'_>) -> Result<Representation> {
+fn presentation_impl(handle: &A11yHandle, inv: &Invocation<'_>) -> Result<Representation> {
     // No capability check, and that is the contract: this action declares none,
     // and what it can reach is bounded by the projection rather than by a gate.
     let app = inv.bindings.get("app");
-    let rendering = crate::load::presentation(app).map_err(config_error)?;
+    let rendering = handle.presentation(app).map_err(config_error)?;
     let subject = match app {
         Some(app) => format!("{PRESENTATION_IRI}:{app}"),
         None => PRESENTATION_IRI.to_string(),
@@ -213,24 +354,35 @@ fn presentation_impl(inv: &Invocation<'_>) -> Result<Representation> {
         JSON => (ReprType::new(JSON), rendering.to_json()),
         TURTLE => (
             ReprType::new("text/turtle").with_param("charset", "utf-8"),
-            rendering.to_turtle(&subject, app),
+            rendering.to_turtle(&subject, handle.layer(app)),
         ),
         _ => (plain(), rendering.to_toml()),
     };
     // Same files, same threads as the gated resource: the two views are cached
     // separately and invalidated together.
     let mut repr = Representation::new(repr_type, body.into_bytes()).cacheable();
-    for thread in crate::load::threads(app).map_err(config_error)? {
+    for thread in handle.threads(app).map_err(config_error)? {
         repr = repr.depends_on(thread);
     }
     Ok(repr)
 }
 
-/// `urn:a11y:presentation` / `urn:a11y:presentation:{app}` — the rendering half
-/// of the effective config, ungated.
+/// `urn:a11y:presentation` / `urn:a11y:presentation:{app}` over **this
+/// machine's** config home — sugar for [`presentation_with`] over
+/// [`A11yHandle::ambient`].
 #[cfg(not(target_family = "wasm"))]
 pub fn presentation() -> FnEndpoint {
-    FnEndpoint::new("a11yPresentation", presentation_impl).with_description(
+    presentation_with(Arc::new(A11yHandle::ambient(None)))
+}
+
+/// `urn:a11y:presentation` / `urn:a11y:presentation:{app}` — the rendering half
+/// of the effective config, ungated, layered within the handle's config home.
+#[cfg(not(target_family = "wasm"))]
+pub fn presentation_with(handle: Arc<A11yHandle>) -> FnEndpoint {
+    FnEndpoint::new("a11yPresentation", move |inv| {
+        presentation_impl(&handle, inv)
+    })
+    .with_description(
         Description::new("a11yPresentation")
             .title("Effective accessibility config: the rendering half")
             .summary(
@@ -360,29 +512,50 @@ pub fn contrast() -> FnEndpoint {
     )
 }
 
-/// The module's space: `urn:a11y:contrast` everywhere, plus the config
-/// endpoints on hosts that have a filesystem.
+/// The module's space over **this machine's** config home: `urn:a11y:contrast`
+/// everywhere, plus the config endpoints on hosts that have a filesystem.
 ///
 /// On wasm the config endpoints are absent rather than present-and-failing: an
 /// action in the manifold that cannot succeed is worse than one that is not
 /// offered, since an agent will select it.
-#[allow(clippy::let_and_return)] // the config bindings are cfg'd out on wasm
 pub fn space() -> EndpointSpace {
-    let space = EndpointSpace::new().bind(Exact::new(CONTRAST_IRI), contrast());
+    #[cfg(target_family = "wasm")]
+    {
+        EndpointSpace::new().bind(Exact::new(CONTRAST_IRI), contrast())
+    }
     #[cfg(not(target_family = "wasm"))]
-    let space = space
-        .bind(Exact::new(CONFIG_IRI), config())
+    {
+        space_with(Arc::new(A11yHandle::ambient(None)))
+    }
+}
+
+/// The module's space over a config home the caller states.
+///
+/// This is what a host serving a config home other than its own environment's
+/// mounts — and what a test mounts, so that what the endpoints read is a
+/// directory the test wrote rather than the developer's `~/.config/ikigai`.
+///
+/// One handle for all four bindings: the two views of the same files are
+/// separate resources, but they must never be able to disagree about which
+/// files those are.
+#[cfg(not(target_family = "wasm"))]
+pub fn space_with(handle: Arc<A11yHandle>) -> EndpointSpace {
+    EndpointSpace::new()
+        .bind(Exact::new(CONTRAST_IRI), contrast())
+        .bind(Exact::new(CONFIG_IRI), config_with(handle.clone()))
         .bind(
             UriTemplate::parse(CONFIG_TEMPLATE).expect("CONFIG_TEMPLATE is a valid template"),
-            config(),
+            config_with(handle.clone()),
         )
-        .bind(Exact::new(PRESENTATION_IRI), presentation())
+        .bind(
+            Exact::new(PRESENTATION_IRI),
+            presentation_with(handle.clone()),
+        )
         .bind(
             UriTemplate::parse(PRESENTATION_TEMPLATE)
                 .expect("PRESENTATION_TEMPLATE is a valid template"),
-            presentation(),
-        );
-    space
+            presentation_with(handle),
+        )
 }
 
 /// The theme identifiers an `a11y.toml` may name — exposed so a host building a
@@ -518,79 +691,6 @@ mod tests {
         }
     }
 
-    /// The ungated resource is reachable holding nothing at all, and what it
-    /// serves is bounded by the projection rather than by a check. Both halves
-    /// matter: a caller with no grant gets the themes and the floors, and no
-    /// caller — grant or no grant — gets the person-facts from this IRI.
-    #[cfg(not(target_family = "wasm"))]
-    #[test]
-    fn the_presentation_endpoint_needs_no_capability_and_withholds_the_person_facts() {
-        assert!(
-            presentation().describe().requires.is_empty(),
-            "an ungated action must not claim a capability it never checks"
-        );
-        let nothing = Capability::scoped(Vec::<String>::new());
-        let request = Request::new(Verb::Source, iri(PRESENTATION_IRI))
-            .with_arg("as", ArgRef::Inline(JSON.as_bytes().to_vec()));
-        let Ok(rep) = invoke(&presentation(), request, &nothing) else {
-            return; // no config home on this machine; the loader said so
-        };
-        let json: serde_json::Value =
-            serde_json::from_slice(&rep.bytes).expect("the JSON face is JSON");
-        assert!(json["theme"]["dark"].is_string());
-        assert!(json["contrast"]["min"].is_number());
-        assert!(json["text"]["underline_links"].is_boolean());
-        assert!(json["motion"].is_null(), "{json}");
-        assert!(json["text"].get("scale").is_none(), "{json}");
-    }
-
-    /// The two views are separate resources with separate names, because
-    /// authority that differs cannot ride on an argument — and the graph faces
-    /// carry separate subjects, so a reader unioning them never merges a
-    /// withheld property with an unstated one.
-    #[cfg(not(target_family = "wasm"))]
-    #[test]
-    fn the_two_views_are_distinct_subjects_under_distinct_capabilities() {
-        let cap = Capability::scoped([CAP_READ]);
-        let turtle = |ep: &FnEndpoint, subject: &str| {
-            let request = Request::new(Verb::Source, iri(subject))
-                .with_arg("as", ArgRef::Inline(TURTLE.as_bytes().to_vec()));
-            invoke(ep, request, &cap).map(|rep| String::from_utf8_lossy(&rep.bytes).to_string())
-        };
-        let (Ok(gated), Ok(open)) = (
-            turtle(&config(), CONFIG_IRI),
-            turtle(&presentation(), PRESENTATION_IRI),
-        ) else {
-            return; // no config home on this machine
-        };
-        assert!(gated.contains(&format!("<{CONFIG_IRI}> a ik:AccessibilityConfig")));
-        assert!(open.contains(&format!("<{PRESENTATION_IRI}> a ik:AccessibilityConfig")));
-        assert!(
-            !open.contains("prov:wasDerivedFrom"),
-            "the ungated graph names no host paths: {open}"
-        );
-    }
-
-    /// The result is CACHEABLE and carries a thread per candidate file. This is
-    /// the property the whole design turns on: an uncacheable config would make
-    /// every stylesheet that joined it uncacheable too.
-    #[cfg(not(target_family = "wasm"))]
-    #[test]
-    fn the_config_is_cacheable_and_declares_its_files() {
-        let cap = Capability::scoped([CAP_READ]);
-        let request = Request::new(Verb::Source, iri(CONFIG_IRI));
-        let Ok(rep) = invoke(&config(), request, &cap) else {
-            // No config home on this machine (no HOME, no XDG) — the loader says
-            // so rather than guessing, and there is nothing to assert here.
-            return;
-        };
-        assert_eq!(rep.expiry, ikigai_core::Expiry::Never, "cacheable");
-        let threads: Vec<String> = rep.threads().iter().map(|t| t.to_string()).collect();
-        assert_eq!(threads.len(), 1, "the shared layer only: {threads:?}");
-        assert!(threads[0].starts_with("urn:file:/"), "{threads:?}");
-        assert!(threads[0].ends_with("a11y.toml"), "{threads:?}");
-    }
-
     #[cfg(not(target_family = "wasm"))]
     #[test]
     fn the_manifold_declares_every_face_and_a_typed_theme_enum() {
@@ -614,58 +714,388 @@ mod tests {
     #[test]
     fn the_space_binds_every_identifier() {
         use ikigai_core::Space;
-        let entries = space().entries().expect("an EndpointSpace enumerates");
-        let patterns: Vec<&str> = entries.iter().map(|e| e.pattern.as_str()).collect();
-        for expected in [
-            CONTRAST_IRI,
-            CONFIG_IRI,
-            CONFIG_TEMPLATE,
-            PRESENTATION_IRI,
-            PRESENTATION_TEMPLATE,
+        for space in [
+            space(),
+            space_with(std::sync::Arc::new(A11yHandle::new(None, None))),
         ] {
-            assert!(patterns.contains(&expected), "{expected}: {patterns:?}");
+            let entries = space.entries().expect("an EndpointSpace enumerates");
+            let patterns: Vec<&str> = entries.iter().map(|e| e.pattern.as_str()).collect();
+            for expected in [
+                CONTRAST_IRI,
+                CONFIG_IRI,
+                CONFIG_TEMPLATE,
+                PRESENTATION_IRI,
+                PRESENTATION_TEMPLATE,
+            ] {
+                assert!(patterns.contains(&expected), "{expected}: {patterns:?}");
+            }
         }
     }
 
-    /// The `{app}` binding reaches the ungated view too — an operator's
-    /// `cms-web.a11y.toml` theme override must apply to the resource the
-    /// stylesheet actually reads, or the override silently does nothing.
+    /// The config endpoints, against config homes these tests WRITE.
+    ///
+    /// Every test in here used to end in `else { return; }` or assert only that
+    /// a field had the right type, because the endpoint read `$HOME` and no test
+    /// owned the file its values came from. Measured on 2026-08-23, the same
+    /// suite passed 58/58 against three different sandbox configs — including
+    /// one whose `a11y.toml` did not parse. These assert values, against layers
+    /// written three lines above them, and there is no machine that can skip
+    /// them.
     #[cfg(not(target_family = "wasm"))]
-    #[test]
-    fn the_app_binding_reaches_the_ungated_view_through_the_kernel() {
+    mod config_home {
+        use super::*;
+        use crate::config::file_iri;
+        use crate::load::STEM;
+        use crate::scratch::Scratch;
         use std::sync::Arc;
-        let kernel = ikigai_core::Kernel::new(Arc::new(space()));
-        let nothing = Capability::scoped(Vec::<String>::new());
-        let request = Request::new(Verb::Source, iri("urn:a11y:presentation:cms-web"))
-            .with_arg("as", ArgRef::Inline(TURTLE.as_bytes().to_vec()));
-        let Ok(rep) = block_on(kernel.issue(request, &nothing)) else {
-            return; // no config home on this machine
-        };
-        let ttl = String::from_utf8_lossy(&rep.bytes);
-        assert!(ttl.contains("<urn:a11y:presentation:cms-web>"), "{ttl}");
-        assert!(ttl.contains("ik:app \"cms-web\""), "{ttl}");
-        assert_eq!(rep.threads().len(), 2, "{:?}", rep.threads());
-    }
 
-    /// End to end through a real kernel: the `{app}` binding reaches the
-    /// endpoint, which is the whole reason the second grammar exists — the
-    /// per-app IRI must serve a per-app graph, not the shared one under a
-    /// different name.
-    #[cfg(not(target_family = "wasm"))]
-    #[test]
-    fn the_app_binding_reaches_the_graph_face_through_the_kernel() {
-        use std::sync::Arc;
-        let kernel = ikigai_core::Kernel::new(Arc::new(space()));
-        let cap = Capability::scoped([CAP_READ]);
-        let request = Request::new(Verb::Source, iri("urn:a11y:config:cms-web"))
-            .with_arg("as", ArgRef::Inline(TURTLE.as_bytes().to_vec()));
-        let Ok(rep) = block_on(kernel.issue(request, &cap)) else {
-            return; // no config home on this machine; the loader said so
-        };
-        let ttl = String::from_utf8_lossy(&rep.bytes);
-        assert!(ttl.contains("<urn:a11y:config:cms-web>"), "{ttl}");
-        assert!(ttl.contains("ik:app \"cms-web\""), "{ttl}");
-        // Both candidate files are declared, not just the one that exists.
-        assert_eq!(rep.threads().len(), 2, "{:?}", rep.threads());
+        /// The shared layer every fixture below starts from: a floor and a theme
+        /// that are NOT the defaults (so a test asserting them cannot be passing
+        /// on a default), plus both person-facts (so the ungated view has
+        /// something real to withhold).
+        const SHARED: &str = "[contrast]\nmin = 7.0\n\n[theme]\ndark = \"Nord\"\n\n\
+                              [motion]\nreduce = true\n\n\
+                              [text]\nscale = 1.75\nunderline_links = false\n";
+        /// An app layer that overrides exactly one key.
+        const APP_LAYER: &str = "[theme]\ndark = \"Dracula\"\n";
+
+        fn seeded(tag: &str) -> Scratch {
+            let home = Scratch::new(tag);
+            home.write(STEM, SHARED);
+            home
+        }
+
+        fn over(home: &Scratch) -> Arc<A11yHandle> {
+            Arc::new(A11yHandle::new(Some(home.path().to_path_buf()), None))
+        }
+
+        fn json_face(ep: &FnEndpoint, resource: &str, cap: &Capability) -> serde_json::Value {
+            let request = Request::new(Verb::Source, iri(resource))
+                .with_arg("as", ArgRef::Inline(JSON.as_bytes().to_vec()));
+            let rep = invoke(ep, request, cap).expect("a stated config home resolves");
+            serde_json::from_slice(&rep.bytes).expect("the JSON face is JSON")
+        }
+
+        fn json_through(
+            kernel: &ikigai_core::Kernel,
+            resource: &str,
+            cap: &Capability,
+        ) -> serde_json::Value {
+            let request = Request::new(Verb::Source, iri(resource))
+                .with_arg("as", ArgRef::Inline(JSON.as_bytes().to_vec()));
+            let rep = block_on(kernel.issue(request, cap)).expect("a stated config home resolves");
+            serde_json::from_slice(&rep.bytes).expect("the JSON face is JSON")
+        }
+
+        /// The values the endpoint serves are the values in the handle's home —
+        /// asserted as numbers and names, not as `is_number()`.
+        #[test]
+        fn the_endpoint_serves_the_config_home_it_was_handed() {
+            let home = seeded("served");
+            let json = json_face(&config_with(over(&home)), CONFIG_IRI, &Capability::root());
+            assert_eq!(json["contrast"]["min"], 7.0);
+            assert_eq!(json["theme"]["dark"], "Nord");
+            assert_eq!(json["motion"]["reduce"], true);
+            assert_eq!(json["text"]["scale"], 1.75);
+            assert_eq!(
+                json["layers"][0],
+                home.path().join(STEM).display().to_string(),
+                "the provenance names the fixture, so a wrong home would be visible"
+            );
+        }
+
+        /// ★ Two mounts, two config homes, ONE process. This test could not be
+        /// written at all while the read was ambient: `cargo test` shares a
+        /// process across a crate's tests, so there was one `$HOME` and one
+        /// possible answer.
+        #[test]
+        fn two_handles_in_one_process_serve_different_configs() {
+            let strict = Scratch::new("strict");
+            strict.write(STEM, "[contrast]\nmin = 21.0\n");
+            let lenient = Scratch::new("lenient");
+            lenient.write(STEM, "[contrast]\nmin = 3.0\n");
+            let root = Capability::root();
+            assert_eq!(
+                json_face(&config_with(over(&strict)), CONFIG_IRI, &root)["contrast"]["min"],
+                21.0
+            );
+            assert_eq!(
+                json_face(&config_with(over(&lenient)), CONFIG_IRI, &root)["contrast"]["min"],
+                3.0
+            );
+        }
+
+        /// The layering the operator is promised, through a real kernel: an app
+        /// file overrides one key and the shared floor stands.
+        #[test]
+        fn an_app_layer_overrides_one_key_and_the_shared_floor_stands() {
+            let home = seeded("layered");
+            home.write("cms-web.a11y.toml", APP_LAYER);
+            let kernel = ikigai_core::Kernel::new(Arc::new(space_with(over(&home))));
+            let cap = Capability::scoped([CAP_READ]);
+
+            let app = json_through(&kernel, "urn:a11y:config:cms-web", &cap);
+            assert_eq!(app["theme"]["dark"], "Dracula");
+            assert_eq!(app["contrast"]["min"], 7.0, "the shared floor SURVIVES");
+
+            let shared = json_through(&kernel, CONFIG_IRI, &cap);
+            assert_eq!(
+                shared["theme"]["dark"], "Nord",
+                "and the app file is not read"
+            );
+
+            // An app with no file of its own sees the shared layer only.
+            let other = json_through(&kernel, "urn:a11y:config:dev-server", &cap);
+            assert_eq!(other["theme"]["dark"], "Nord");
+        }
+
+        /// An absent file is a layer that states nothing — the defaults, and not
+        /// an error.
+        #[test]
+        fn a_missing_layer_states_nothing_rather_than_failing() {
+            let home = Scratch::new("empty");
+            let json = json_face(&config_with(over(&home)), CONFIG_IRI, &Capability::root());
+            assert_eq!(json["contrast"]["min"], crate::config::DEFAULT_MIN);
+            assert_eq!(json["theme"]["dark"], crate::config::DEFAULT_DARK);
+            assert!(
+                json["layers"]
+                    .as_array()
+                    .expect("layers is an array")
+                    .is_empty(),
+                "{json}"
+            );
+        }
+
+        /// ★ A config that does not parse is an ERROR, on both views. This is
+        /// the row of the measured table that mattered most: a corrupt
+        /// `a11y.toml` used to leave the suite at 58 passed, because nothing
+        /// read it.
+        #[test]
+        fn a_corrupt_layer_fails_loudly_and_names_the_file() {
+            let home = Scratch::new("corrupt");
+            home.write(STEM, "[contrast\nmin = 21.0\nthis is not toml\n");
+            let nothing = Capability::scoped(Vec::<String>::new());
+            for (ep, resource, cap) in [
+                (config_with(over(&home)), CONFIG_IRI, Capability::root()),
+                (presentation_with(over(&home)), PRESENTATION_IRI, nothing),
+            ] {
+                let request = Request::new(Verb::Source, iri(resource));
+                match invoke(&ep, request, &cap) {
+                    // Permanent, not `Unavailable`: bad TOML does not parse on
+                    // retry.
+                    Err(Error::Endpoint(message)) => assert!(
+                        message.contains(&home.path().join(STEM).display().to_string()),
+                        "the failure names the file that failed: {message}"
+                    ),
+                    other => panic!("a config that does not parse must not read as one: {other:?}"),
+                }
+            }
+        }
+
+        /// A misspelled theme is refused at the resource too, not only in the
+        /// loader — an operator who typed it must not be told everything is fine.
+        #[test]
+        fn an_unknown_theme_is_refused_by_the_endpoint() {
+            let home = Scratch::new("misspelled");
+            home.write(STEM, "[theme]\ndark = \"Base16OceanDrak\"\n");
+            let request = Request::new(Verb::Source, iri(CONFIG_IRI));
+            match invoke(&config_with(over(&home)), request, &Capability::root()) {
+                Err(Error::Endpoint(message)) => {
+                    assert!(message.contains("Base16OceanDrak"), "{message}")
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+
+        /// No config home at all is a legal under-configured state: the handle
+        /// is CONSTRUCTED (no fallible constructor, no guessed directory), and
+        /// the absence surfaces at the resolution that needed it, saying what is
+        /// missing.
+        #[test]
+        fn no_config_home_is_a_legal_state_that_fails_at_resolution() {
+            let handle = Arc::new(A11yHandle::new(None, None));
+            assert!(handle.home().is_none());
+            let request = Request::new(Verb::Source, iri(CONFIG_IRI));
+            match invoke(&config_with(handle), request, &Capability::root()) {
+                Err(Error::Endpoint(message)) => {
+                    assert!(message.contains("no ikigai config home"), "{message}")
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+
+        /// The ungated view reads the very same files and stops at the rendering
+        /// half. Both halves are asserted as VALUES now: the floor the fixture
+        /// states comes back, and the person-facts that are demonstrably in the
+        /// file do not.
+        #[test]
+        fn the_ungated_view_serves_the_same_files_and_withholds_the_person_facts() {
+            let home = seeded("halves");
+            assert!(
+                presentation().describe().requires.is_empty(),
+                "an ungated action must not claim a capability it never checks"
+            );
+            let nothing = Capability::scoped(Vec::<String>::new());
+            let open = json_face(&presentation_with(over(&home)), PRESENTATION_IRI, &nothing);
+            assert_eq!(open["theme"]["dark"], "Nord");
+            assert_eq!(open["contrast"]["min"], 7.0);
+            assert_eq!(open["text"]["underline_links"], false);
+            assert!(open["motion"].is_null(), "{open}");
+            assert!(open["text"].get("scale").is_none(), "{open}");
+
+            // The same files state them; the gated resource is where they live.
+            let gated = json_face(&config_with(over(&home)), CONFIG_IRI, &Capability::root());
+            assert_eq!(gated["motion"]["reduce"], true);
+            assert_eq!(gated["text"]["scale"], 1.75);
+        }
+
+        /// The two views are separate resources with separate subjects, and the
+        /// ungated graph names no host paths.
+        #[test]
+        fn the_two_views_are_distinct_subjects_under_distinct_capabilities() {
+            let home = seeded("subjects");
+            let cap = Capability::scoped([CAP_READ]);
+            let turtle = |ep: &FnEndpoint, subject: &str| {
+                let request = Request::new(Verb::Source, iri(subject))
+                    .with_arg("as", ArgRef::Inline(TURTLE.as_bytes().to_vec()));
+                invoke(ep, request, &cap)
+                    .map(|rep| String::from_utf8_lossy(&rep.bytes).to_string())
+                    .expect("a stated config home resolves")
+            };
+            let gated = turtle(&config_with(over(&home)), CONFIG_IRI);
+            let open = turtle(&presentation_with(over(&home)), PRESENTATION_IRI);
+            assert!(gated.contains(&format!("<{CONFIG_IRI}> a ik:AccessibilityConfig")));
+            assert!(open.contains(&format!("<{PRESENTATION_IRI}> a ik:AccessibilityConfig")));
+            assert!(gated.contains("ik:contrastMin 7.0"), "{gated}");
+            assert!(open.contains("ik:contrastMin 7.0"), "{open}");
+            assert!(
+                gated.contains(&file_iri(&home.path().join(STEM))),
+                "the gated graph names the file it was derived from: {gated}"
+            );
+            assert!(
+                !open.contains("prov:wasDerivedFrom"),
+                "the ungated graph names no host paths: {open}"
+            );
+        }
+
+        /// Cacheable, with a thread on every CANDIDATE file — named after the
+        /// fixture, so a handle reading the wrong home would fail here rather
+        /// than serve plausible values.
+        #[test]
+        fn the_config_is_cacheable_and_declares_the_fixture_files() {
+            let home = seeded("threads");
+            let cap = Capability::scoped([CAP_READ]);
+            let threads_of = |resource: &str| {
+                let request = Request::new(Verb::Source, iri(resource));
+                let rep = invoke(&config_with(over(&home)), request, &cap)
+                    .expect("a stated config home resolves");
+                assert_eq!(rep.expiry, ikigai_core::Expiry::Never, "cacheable");
+                rep.threads()
+                    .iter()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<String>>()
+            };
+            assert_eq!(
+                threads_of(CONFIG_IRI),
+                vec![file_iri(&home.path().join(STEM))]
+            );
+
+            // The per-app resource declares the override too, whether or not it
+            // exists — creating it must invalidate this answer. Through a kernel,
+            // because `{app}` is captured by the template match: a detached
+            // invocation of the same endpoint carries no bindings.
+            let kernel = ikigai_core::Kernel::new(Arc::new(space_with(over(&home))));
+            let request = Request::new(Verb::Source, iri("urn:a11y:config:cms-web"));
+            let rep = block_on(kernel.issue(request, &cap)).expect("the fixture resolves");
+            let bound: Vec<String> = rep.threads().iter().map(|t| t.to_string()).collect();
+            assert_eq!(
+                bound,
+                vec![
+                    file_iri(&home.path().join(STEM)),
+                    file_iri(&home.path().join("cms-web.a11y.toml")),
+                ]
+            );
+        }
+
+        /// The `{app}` binding reaches both views through a real kernel, and
+        /// carries the app layer's VALUES with it.
+        #[test]
+        fn the_app_binding_reaches_both_views_through_the_kernel() {
+            let home = seeded("bound");
+            home.write("cms-web.a11y.toml", APP_LAYER);
+            let kernel = ikigai_core::Kernel::new(Arc::new(space_with(over(&home))));
+            let ttl = |resource: &str, cap: &Capability| {
+                let request = Request::new(Verb::Source, iri(resource))
+                    .with_arg("as", ArgRef::Inline(TURTLE.as_bytes().to_vec()));
+                let rep = block_on(kernel.issue(request, cap)).expect("the fixture resolves");
+                assert_eq!(rep.threads().len(), 2, "{:?}", rep.threads());
+                String::from_utf8_lossy(&rep.bytes).to_string()
+            };
+            let open = ttl(
+                "urn:a11y:presentation:cms-web",
+                &Capability::scoped(Vec::<String>::new()),
+            );
+            assert!(open.contains("<urn:a11y:presentation:cms-web>"), "{open}");
+            assert!(open.contains("ik:app \"cms-web\""), "{open}");
+            assert!(open.contains("ik:themeDark \"Dracula\""), "{open}");
+
+            let gated = ttl("urn:a11y:config:cms-web", &Capability::scoped([CAP_READ]));
+            assert!(gated.contains("<urn:a11y:config:cms-web>"), "{gated}");
+            assert!(gated.contains("ik:app \"cms-web\""), "{gated}");
+            assert!(gated.contains("ik:themeDark \"Dracula\""), "{gated}");
+        }
+
+        /// The mount's own app is the DEFAULT for the bare IRI; a `{app}` in the
+        /// IRI names its own resource and wins. A mount whose default overrode
+        /// the name in the IRI would serve one resource's config under another's
+        /// identity.
+        #[test]
+        fn the_iri_binding_wins_over_the_mounts_own_app() {
+            let home = Scratch::new("mounted");
+            home.write(STEM, "[contrast]\nmin = 7.0\n");
+            home.write("dev-server.a11y.toml", "[theme]\ndark = \"Nord\"\n");
+            home.write("cms-web.a11y.toml", APP_LAYER);
+            let handle = Arc::new(A11yHandle::new(
+                Some(home.path().to_path_buf()),
+                Some("dev-server".to_string()),
+            ));
+            let kernel = ikigai_core::Kernel::new(Arc::new(space_with(handle.clone())));
+            let cap = Capability::scoped([CAP_READ]);
+
+            assert_eq!(
+                json_through(&kernel, CONFIG_IRI, &cap)["theme"]["dark"],
+                "Nord",
+                "the mount's own layer applies where the IRI names none"
+            );
+            assert_eq!(
+                json_through(&kernel, "urn:a11y:config:cms-web", &cap)["theme"]["dark"],
+                "Dracula",
+                "and the bound name wins where there is one"
+            );
+
+            assert_eq!(handle.layer(None), Some("dev-server"));
+            assert_eq!(handle.layer(Some("cms-web")), Some("cms-web"));
+            assert_eq!(
+                A11yHandle::new(None, Some(String::new())).app(),
+                None,
+                "an empty name counts as absent, per layered_paths_in"
+            );
+        }
+
+        /// The ambient sugar is [`A11yHandle::new`] over the machine's own home,
+        /// asserted against the RULE rather than a fixed path — the harness's
+        /// environment is not this test's to pin, which is the whole reason the
+        /// endpoints stopped reading it.
+        #[test]
+        fn the_ambient_handle_matches_the_rule() {
+            assert_eq!(
+                A11yHandle::ambient(None).home().map(Path::to_path_buf),
+                ikigai_core::config::config_home()
+            );
+            assert_eq!(
+                A11yHandle::ambient(Some("cms-web".to_string())).app(),
+                Some("cms-web")
+            );
+        }
     }
 }
