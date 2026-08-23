@@ -133,6 +133,39 @@ dark = "Dracula"
 cms-web gets Dracula **and** the 7.0 floor. Wholesale replacement — the easy
 accidental implementation — would silently drop the operator's floor.
 
+## Mounting: the config home is stated, not sniffed
+
+`space()` mounts the endpoints over **this machine's** config home — the sugar a
+host configuring itself from its own environment wants. `space_with(handle)`
+mounts them over a home the caller states:
+
+```rust
+use ikigai_a11y::{space_with, A11yHandle};
+use std::sync::Arc;
+
+// This machine, with this binary's override layer.
+let mounted = space_with(Arc::new(A11yHandle::ambient(Some("cms-web".into()))));
+
+// Or a home the caller owns — a fixture, or another user's config.
+let over_fixture = space_with(Arc::new(A11yHandle::new(Some(home), None)));
+```
+
+The home is taken **at construction**, never per request: it is a fact about the
+mount, and one process legitimately has two answers. The handle holds the *home*
+rather than a parsed config, because the golden thread's contract is that cutting
+it recomputes — a handle that cached the config would serve the one the process
+started with forever.
+
+An `{app}` in the IRI still wins over the mount's own: `urn:a11y:config:cms-web`
+names its own resource, and a mount's default applies only where the IRI names
+none. No config home at all is a legal under-configured state (`Option`, never a
+guessed directory); it becomes an error at the resolution that needed it.
+
+Why it matters beyond tidiness: while the endpoints read `$HOME` themselves, this
+crate's own endpoint suite passed 58/58 against three different configs —
+including one whose `a11y.toml` did not parse — because no test owned the file
+its values came from. See `ikigai-core/docs/design/hermetic-endpoint-tests.md`.
+
 ## The schema
 
 ```toml
@@ -218,7 +251,7 @@ stylesheets recompute, nothing polls.
 | `color` | WCAG luminance and ratio, alpha-composited | pure, wasm |
 | `config` | schema, key-wise merge, both views, the three faces | pure, wasm |
 | `css` | the contrast-floor pass over generated CSS | pure, wasm |
-| `load` | the layered read from the config home | native |
+| `load` | the layered read from a stated (or ambient) config home | native |
 | `themes` | theme name ⇄ `syntect` theme, turnkey CSS | feature `themes` |
 
 The default build is wasm-clean; `themes` is off by default because `two-face`

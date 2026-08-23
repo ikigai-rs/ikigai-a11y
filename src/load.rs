@@ -59,7 +59,16 @@ pub use crate::config::STEM;
 /// layer that states nothing, not an error.
 pub fn paths(app: Option<&str>) -> Result<Vec<PathBuf>, ConfigError> {
     let home = config_home().ok_or(ConfigError::NoConfigHome)?;
-    Ok(layered_paths_in(&home, STEM, app))
+    Ok(paths_in(&home, app))
+}
+
+/// [`paths`] rooted at an explicit config home — the testable form, and what
+/// [`crate::A11yHandle`] calls.
+///
+/// Infallible: a home that was stated cannot be missing, so there is no
+/// `NoConfigHome` to return. The `Option` lives one level up, on the handle.
+pub fn paths_in(home: &Path, app: Option<&str>) -> Vec<PathBuf> {
+    layered_paths_in(home, STEM, app)
 }
 
 /// The golden threads the effective config depends on: one per **candidate**
@@ -78,7 +87,14 @@ pub fn paths(app: Option<&str>) -> Result<Vec<PathBuf>, ConfigError> {
 /// these names; the fs module's own watcher, rooted at the working directory,
 /// will not see them.
 pub fn threads(app: Option<&str>) -> Result<Vec<String>, ConfigError> {
-    Ok(paths(app)?.iter().map(|p| file_iri(p)).collect())
+    let home = config_home().ok_or(ConfigError::NoConfigHome)?;
+    Ok(threads_in(&home, app))
+}
+
+/// [`threads`] rooted at an explicit config home — the testable form, and what
+/// [`crate::A11yHandle`] calls.
+pub fn threads_in(home: &Path, app: Option<&str>) -> Vec<String> {
+    paths_in(home, app).iter().map(|p| file_iri(p)).collect()
 }
 
 /// The **rendering half** of the effective config for `app` — themes, contrast
@@ -162,39 +178,12 @@ mod tests {
     use super::*;
     use crate::config::{DEFAULT_DARK, DEFAULT_LIGHT};
 
-    /// A scratch config home that removes itself. No dev-dependency for two
-    /// directories.
-    struct Scratch(PathBuf);
-
-    impl Scratch {
-        fn new(tag: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!(
-                "ikigai-a11y-{}-{}-{tag}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("clock is after the epoch")
-                    .as_nanos()
-            ));
-            std::fs::create_dir_all(&dir).expect("scratch dir");
-            Scratch(dir)
-        }
-
-        fn write(&self, name: &str, contents: &str) {
-            std::fs::write(self.0.join(name), contents).expect("scratch write");
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::scratch::Scratch;
 
     #[test]
     fn no_files_at_all_is_the_defaults_not_an_error() {
         let home = Scratch::new("empty");
-        let effective = complete_in(&home.0, Some("cms-web")).unwrap();
+        let effective = complete_in(home.path(), Some("cms-web")).unwrap();
         assert_eq!(effective, A11y::default());
         assert!(effective.layers.is_empty());
     }
@@ -210,20 +199,20 @@ mod tests {
         );
         home.write("cms-web.a11y.toml", "[theme]\ndark = \"Dracula\"\n");
 
-        let effective = complete_in(&home.0, Some("cms-web")).unwrap();
+        let effective = complete_in(home.path(), Some("cms-web")).unwrap();
         assert_eq!(effective.theme.dark, "Dracula");
         assert_eq!(effective.contrast.min, 7.0, "the shared floor SURVIVES");
         assert_eq!(effective.theme.light, DEFAULT_LIGHT);
         assert_eq!(effective.layers.len(), 2, "both layers recorded");
 
         // Another app sees the shared file only.
-        let other = complete_in(&home.0, Some("dev-server")).unwrap();
+        let other = complete_in(home.path(), Some("dev-server")).unwrap();
         assert_eq!(other.theme.dark, "Nord");
         assert_eq!(other.contrast.min, 7.0);
         assert_eq!(other.layers.len(), 1);
 
         // And no app at all sees the shared file only, too.
-        let shared = complete_in(&home.0, None).unwrap();
+        let shared = complete_in(home.path(), None).unwrap();
         assert_eq!(shared.theme.dark, "Nord");
     }
 
@@ -231,7 +220,7 @@ mod tests {
     fn a_bad_file_fails_loudly_and_names_itself() {
         let home = Scratch::new("bad");
         home.write("a11y.toml", "[theme]\ndark = \"Base16OceanDrak\"\n");
-        let err = complete_in(&home.0, None).unwrap_err();
+        let err = complete_in(home.path(), None).unwrap_err();
         assert!(matches!(err, ConfigError::UnknownTheme { .. }), "{err:?}");
         assert_eq!(
             A11y::default().theme.dark,
@@ -253,13 +242,13 @@ mod tests {
              [motion]\nreduce = true\n\n[text]\nscale = 1.75\nunderline_links = false\n",
         );
 
-        let rendering = presentation_in(&home.0, None).unwrap();
+        let rendering = presentation_in(home.path(), None).unwrap();
         assert_eq!(rendering.theme.dark, "Nord");
         assert_eq!(rendering.contrast.min, 7.0);
         assert!(!rendering.underline_links);
 
         // The person-facts ARE in the file, and the whole config sees them.
-        let whole = complete_in(&home.0, None).unwrap();
+        let whole = complete_in(home.path(), None).unwrap();
         assert_eq!(whole.motion.reduce, Some(true));
         assert_eq!(whole.text.scale, 1.75);
 
