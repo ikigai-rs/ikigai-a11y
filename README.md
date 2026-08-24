@@ -221,6 +221,44 @@ the theme wrote it and reported. The pass is idempotent.
 `cargo run --features themes --example theme_survey` prints the state of all 32
 embedded themes at a given floor.
 
+### ★ Proving the config reached the output: re-run the pass over it
+
+This is the general answer to *"how does a downstream crate prove that its
+`a11y.toml` actually reached the artifact it generated?"* — and it was invented
+twice, independently, in one day. It is one line:
+
+> **Re-run `apply_floor` at the configured `min` over the generated output, and
+> assert `lifted.is_empty()`.**
+
+The pass is idempotent, so a second pass over output that was already produced at
+that floor finds nothing to lift. If it *does* lift something, the floor never
+arrived — the config was not read, or was read and then not threaded through to
+the generator. There is no third explanation, which is what makes it an assertion
+rather than a heuristic.
+
+**Assert on `lifted`, not on `clears_floor()`.** That is the whole reason the split
+between `lifted` and `unrepaired` exists here. `unrepaired` holds rules that are
+below the floor and *cannot* be repaired from the theme's own palette — a rule that
+repaints its own background is the usual case, since it changes what its text sits
+on. Those are a fact about the theme, not evidence that the config failed to
+arrive, and counting them would make the assertion fail for a reason the consumer
+cannot fix.
+
+`ikigai-browse`'s `a_raised_contrast_floor_reaches_the_stylesheet` is the worked
+example: it writes `min = 7.0` into a tempdir `a11y.toml`, resolves the stylesheet
+through the kernel, and re-runs the pass over each scheme block. Two disciplines in
+it are what make such a test durable rather than a maintenance tax:
+
+- **Read the ground and foreground back out of the generated output** rather than
+  restating them in the test. A test that hard-codes the colours it expects stops
+  testing the config the moment the theme is retuned, and does so silently.
+- **Assert the mechanism, not a colour count.** Then add the anti-vacuity control:
+  check that the sheet generated at the *default* floor does **not** clear the
+  raised one. Without it the test passes forever the day a theme starts clearing
+  7:1 on its own, and stops proving that anything reached anything. `ikigai-browse`
+  spells that failure out in the assertion message, so the next person is told what
+  to do (raise the floor, or name a control theme) instead of deleting the test.
+
 ## Cacheability
 
 Both views are `.cacheable()` with a golden thread on **every candidate

@@ -230,6 +230,11 @@ impl A11yHandle {
 
     /// The golden threads that read depends on: one per candidate file, whether
     /// or not it exists.
+    ///
+    /// **Thread NAMES, not paths** — `urn:file:/abs/path/a11y.toml`, as
+    /// [`crate::load::threads_in`] spells out. A host wiring a watcher wants
+    /// exactly these strings (a cut is keyed on the name); a host wanting the
+    /// files to watch wants [`crate::load::paths_in`] over [`Self::home`].
     pub fn threads(&self, bound: Option<&str>) -> std::result::Result<Vec<String>, ConfigError> {
         Ok(crate::load::threads_in(self.rooted()?, self.layer(bound)))
     }
