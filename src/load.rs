@@ -93,6 +93,31 @@ pub fn threads(app: Option<&str>) -> Result<Vec<String>, ConfigError> {
 
 /// [`threads`] rooted at an explicit config home — the testable form, and what
 /// [`crate::A11yHandle`] calls.
+///
+/// **What comes back are thread NAMES, not paths**: each is the candidate file's
+/// `urn:file:` IRI over its absolute path, built by [`crate::config::file_iri`].
+/// A consumer wiring a watcher wants the IRI (that is what a cut is keyed on) and
+/// a consumer wanting the files themselves wants [`paths_in`] instead — passing
+/// one of these to anything that opens a file gets `No such file or directory`
+/// with the scheme still on the front.
+///
+/// ```
+/// # use std::path::Path;
+/// let names = ikigai_a11y::load::threads_in(Path::new("/etc/xdg/ikigai"), Some("cms-web"));
+/// assert_eq!(
+///     names,
+///     vec![
+///         "urn:file:/etc/xdg/ikigai/a11y.toml".to_string(),
+///         "urn:file:/etc/xdg/ikigai/cms-web.a11y.toml".to_string(),
+///     ]
+/// );
+/// ```
+///
+/// Order is [`paths_in`]'s: lowest precedence first, the shared layer before the
+/// app override. It is stable, but a consumer should treat the result as a SET —
+/// nothing about a thread name depends on its position, and with no `app` the
+/// second entry is simply not there. Watch all of them; the list is the
+/// dependency, not a ranking.
 pub fn threads_in(home: &Path, app: Option<&str>) -> Vec<String> {
     paths_in(home, app).iter().map(|p| file_iri(p)).collect()
 }
