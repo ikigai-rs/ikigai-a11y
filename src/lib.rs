@@ -34,7 +34,7 @@
 //!
 //! - [`color`] — WCAG relative luminance and contrast ratio. Pure, wasm-clean,
 //!   alpha-composited.
-//! - [`config`] — the schema and the **key-wise** layering: built-in defaults ⊕
+//! - [`config`](mod@crate::config) — the schema and the **key-wise** layering: built-in defaults ⊕
 //!   `a11y.toml` ⊕ `{app}.a11y.toml`. A layer states only its differences, and
 //!   every key it stays silent about survives from below.
 //! - [`css`] — the contrast-floor pass: lift a generated stylesheet's sub-floor
@@ -42,7 +42,7 @@
 //!   inventing nothing.
 //!
 //! [`load`] (native) reads the layered files from `ikigai_core::config`'s config
-//! home; [`themes`] (feature `themes`) bridges a configured theme name to a real
+//! home; `themes` (feature `themes`, absent from a default-feature doc build) bridges a configured theme name to a real
 //! `syntect` theme. Everything else compiles to `wasm32-unknown-unknown`.
 //!
 //! ## `app` is the PROCESS's name
