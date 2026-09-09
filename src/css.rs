@@ -20,7 +20,7 @@
 //! Pure text-in, text-out — no syntect, no theme objects — so it compiles to
 //! wasm and works on a stylesheet from any source. A caller with a real
 //! `syntect::highlighting::Theme` gets the ground and foreground handed to it by
-//! the [`themes`](crate::themes) face.
+//! the `themes` face (feature `themes`).
 
 use crate::color::{ratio, Rgba};
 

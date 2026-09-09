@@ -47,7 +47,7 @@ use crate::config::{file_iri, A11y, ConfigError, Patch, Presentation};
 
 /// The config file stem every ikigai front end layers.
 ///
-/// Re-exported from [`crate::config`], where it lives so the pure half can name
+/// Re-exported from [`crate::config`](mod@crate::config), where it lives so the pure half can name
 /// it too: the Turtle face decides a layer's ROLE by comparing a file name to
 /// this stem, and that half must build for wasm, where this module does not
 /// exist at all.
