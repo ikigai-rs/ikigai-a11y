@@ -280,7 +280,27 @@ cached read 1.1µs → first read after cutting the a11y.toml thread 390.3µs
 
 A host that watches the config home and cuts the threads from
 `ikigai_a11y::load::threads` gets the good version: edit `a11y.toml`, derived
-stylesheets recompute, nothing polls.
+stylesheets recompute, nothing polls. **This module declares the threads and
+cuts none of them** — it has no watcher — so without that wiring an edit is
+served stale from the cache. `tests/conformance.rs` pins both halves: the
+stale read after an edit with no cut, and the recompute after cutting exactly
+the name `load::threads_in` returns.
+
+## Conformance
+
+The module **passes
+[`ikigai-conformance`](https://github.com/ikigai-rs/ikigai-conformance)** with
+no opt-outs: `tests/conformance.rs` mounts `space_with` over a fresh temporary
+config home it seeds (a shared layer plus one app override, so the graph face
+is exercised with both layer roles) and runs every check — ArgSpec
+completeness, declared = enforced via `urn:cap:a11y:read`, the skolemized
+Turtle face against `ikigai-vocab`, cacheability, pipeline citizenship. The
+config views are declared `cacheable` and held to it; they are deliberately
+**not** declared `pure` — their results depend on the files — so a cached
+config with an empty golden-thread set would fail the test. `urn:a11y:contrast`
+is declared both, being arithmetic over its arguments. One check is skipped,
+and the report says so: `NAMES`, because the three ids are live MCP tool names
+and are renamed in one coordinated pass across every module.
 
 ## Layout
 
