@@ -44,7 +44,7 @@ themes = ["dep:two-face", "dep:syntect"]
 futures = "0.3"
 # The module recipe as one test (`tests/conformance.rs`): walks every bound
 # endpoint and reports every violation at once. 0.1.0 is the first release.
-ikigai-conformance = "0.1.0"
+ikigai-conformance = "0.2.0"
 
 [[example]]
 name = "theme_survey"
