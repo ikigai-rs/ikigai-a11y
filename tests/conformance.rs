@@ -11,7 +11,9 @@
 //!
 //! - `a11yContrast` is `pure` AND `cacheable`: WCAG arithmetic over two colours
 //!   the caller supplies, no file, clock or platform read, so its cacheable
-//!   result rightly carries an empty golden-thread set. It also needs a
+//!   result rightly carries no golden thread but its own name (which the
+//!   kernel hangs on every cacheable answer since ikigai-core 0.1.73; before
+//!   that the set was empty). It also needs a
 //!   [`Fixture`]: its inputs are `xsd:string`s with a lexical form (`#rrggbb`)
 //!   the suite's minimal `x` does not satisfy.
 //! - `a11yConfig` and `a11yPresentation` are `cacheable` and deliberately NOT

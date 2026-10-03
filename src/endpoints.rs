@@ -983,6 +983,21 @@ mod tests {
             );
         }
 
+        /// The threads a kernel-issued answer carries, less the one name a
+        /// cacheable answer may carry beyond what it declared: its OWN. Since
+        /// ikigai-core 0.1.73 the kernel hangs every cacheable Source/Exists
+        /// answer on its canonical target's thread (ledger #549); before that it
+        /// did not. Only `own` is dropped, and only when present, so this holds
+        /// across the whole caret while a FOREIGN thread still reaches the
+        /// caller's assertion.
+        fn threads_beside_own(rep: &ikigai_core::Representation, own: &str) -> Vec<String> {
+            rep.threads()
+                .iter()
+                .map(|t| t.to_string())
+                .filter(|t| t != own)
+                .collect()
+        }
+
         /// Cacheable, with a thread on every CANDIDATE file — named after the
         /// fixture, so a handle reading the wrong home would fail here rather
         /// than serve plausible values.
@@ -1012,7 +1027,8 @@ mod tests {
             let kernel = ikigai_core::Kernel::new(Arc::new(space_with(over(&home))));
             let request = Request::new(Verb::Source, iri("urn:a11y:config:cms-web"));
             let rep = block_on(kernel.issue(request, &cap)).expect("the fixture resolves");
-            let bound: Vec<String> = rep.threads().iter().map(|t| t.to_string()).collect();
+            // Exactly the two candidate files, besides the answer's own name.
+            let bound = threads_beside_own(&rep, "urn:a11y:config:cms-web");
             assert_eq!(
                 bound,
                 vec![
@@ -1029,11 +1045,22 @@ mod tests {
             let home = seeded("bound");
             home.write("cms-web.a11y.toml", APP_LAYER);
             let kernel = ikigai_core::Kernel::new(Arc::new(space_with(over(&home))));
+            let files = vec![
+                file_iri(&home.path().join(STEM)),
+                file_iri(&home.path().join("cms-web.a11y.toml")),
+            ];
             let ttl = |resource: &str, cap: &Capability| {
                 let request = Request::new(Verb::Source, iri(resource))
                     .with_arg("as", ArgRef::Inline(TURTLE.as_bytes().to_vec()));
                 let rep = block_on(kernel.issue(request, cap)).expect("the fixture resolves");
-                assert_eq!(rep.threads().len(), 2, "{:?}", rep.threads());
+                // Both candidate files and nothing foreign; the answer's own
+                // name is the only other thread it may carry.
+                assert_eq!(
+                    threads_beside_own(&rep, resource),
+                    files,
+                    "{:?}",
+                    rep.threads()
+                );
                 String::from_utf8_lossy(&rep.bytes).to_string()
             };
             let open = ttl(
