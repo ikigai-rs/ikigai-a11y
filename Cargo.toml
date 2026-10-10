@@ -14,9 +14,13 @@ categories = ["accessibility", "wasm"]
 [dependencies]
 # The released kernel, consumed from crates.io — the SAME version the hosts use,
 # so a host links exactly one `ikigai-core` (no duplicate-crate type mismatch).
-# 0.1.56 is the true minimum: `config_home` / `layered_paths` (the path algebra
-# this crate reads, parses and merges) arrived there and nowhere earlier.
-ikigai-core = "0.1.56"
+# 0.1.89 is the floor every test here runs against: `ikigai-conformance` 0.6
+# (the dev-dependency below) needs it, so nothing older is ever built in CI. The
+# API this crate's src calls is older (`config_home` / `layered_paths`, the path
+# algebra it reads, parses and merges, arrived in 0.1.56), but a floor no test
+# compiles against is a claim, not a minimum. A caret on 0.1.x is also a ceiling
+# (`<0.2.0`); the kernel is still on the 0.1 line, so this admits every release.
+ikigai-core = "0.1.89"
 serde = { version = "1", features = ["derive"] }
 # Pure-Rust, wasm-clean: the config half compiles to wasm32-unknown-unknown.
 toml = "0.8"
@@ -43,8 +47,10 @@ themes = ["dep:two-face", "dep:syntect"]
 [dev-dependencies]
 futures = "0.3"
 # The module recipe as one test (`tests/conformance.rs`): walks every bound
-# endpoint and reports every violation at once. 0.1.0 is the first release.
-ikigai-conformance = "0.2.0"
+# endpoint and reports every violation at once. 0.6.0 adds `SPACE-NAME`, which
+# the test declares both constructors to. A caret on 0.x is a CEILING as well as
+# a floor (`"0.6.0"` admits only 0.6.*): raise it deliberately when 0.7 ships.
+ikigai-conformance = "0.6.0"
 
 [[example]]
 name = "theme_survey"
