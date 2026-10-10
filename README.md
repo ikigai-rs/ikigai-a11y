@@ -297,10 +297,15 @@ completeness, declared = enforced via `urn:cap:a11y:read`, the skolemized
 Turtle face against `ikigai-vocab`, cacheability, pipeline citizenship. The
 config views are declared `cacheable` and held to it; they are deliberately
 **not** declared `pure` — their results depend on the files — so a cached
-config with an empty golden-thread set would fail the test. `urn:a11y:contrast`
-is declared both, being arithmetic over its arguments. One check is skipped,
-and the report says so: `NAMES`, because the three ids are live MCP tool names
-and are renamed in one coordinated pass across every module.
+config with no golden thread but its own name would fail the test.
+`urn:a11y:contrast` is declared both, being arithmetic over its arguments. One
+check is skipped, and the report says so: `NAMES`, because the three ids are
+live MCP tool names and are renamed in one coordinated pass across every module.
+
+**The space has no name of its own; the host names it.** Both constructors are
+declared host-named to `SPACE-NAME`: `space_with(handle)` serves whatever home it
+was handed, and `space()` reads this process's config home while it builds, so
+neither is configuration-free and neither may claim `urn:iki:space:a11y`.
 
 ## Layout
 

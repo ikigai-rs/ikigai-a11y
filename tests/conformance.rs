@@ -31,6 +31,15 @@
 //!   excludes an endpoint from the INVOKING checks and leaves NAMES running —
 //!   so dropping the check is the only spelling, and the report prints it as
 //!   skipped.
+//! - Both space constructors are declared **host-named** (`SPACE-NAME`, ledger
+//!   #987): neither is configuration-free, so neither may claim
+//!   `urn:iki:space:a11y`. `space_with(handle)` serves whatever config home it
+//!   was handed, and `space()` on native reads this process's config home at
+//!   construction (`A11yHandle::ambient` calls `config_home()` and bakes the
+//!   path into the handle), so two processes calling it can hold different
+//!   doors. On wasm `space()` binds `urn:a11y:contrast` alone and reads
+//!   nothing, but one function with one name cannot claim one set of doors on
+//!   one target and another set elsewhere, so the host names it there too.
 //!
 //! No opt-outs, no module namespace: every term the Turtle face emits is
 //! defined in `ikigai-vocab` (the suite's VOCABULARY check says so).
@@ -46,8 +55,8 @@
 //! and the name this module declares IS the name a cut is keyed on.
 
 use ikigai_a11y::{A11yHandle, CONFIG_IRI};
-use ikigai_conformance::{Check, Checks, Fixture, Report, Suite};
-use ikigai_core::{ArgRef, Capability, Iri, Kernel, Request, Verb};
+use ikigai_conformance::{Check, Checks, Fixture, Report, SpaceNaming, Suite};
+use ikigai_core::{ArgRef, Capability, EndpointSpace, Iri, Kernel, Request, Verb};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -89,10 +98,16 @@ fn seeded_home() -> PathBuf {
 /// The module's space over `home`, as a host serving a stated config home
 /// mounts it. No mount-level default app: the IRI's `{app}` binding (or its
 /// absence) is what selects the layer.
-fn kernel(home: &Path) -> Kernel {
-    Kernel::new(Arc::new(ikigai_a11y::space_with(Arc::new(
-        A11yHandle::new(Some(home.to_path_buf()), None),
+fn space_over(home: &Path) -> Arc<EndpointSpace> {
+    Arc::new(ikigai_a11y::space_with(Arc::new(A11yHandle::new(
+        Some(home.to_path_buf()),
+        None,
     ))))
+}
+
+/// A kernel over [`space_over`].
+fn kernel(home: &Path) -> Kernel {
+    Kernel::new(space_over(home))
 }
 
 /// The suite, configured for this module (see the file docs for why each line).
@@ -111,12 +126,23 @@ fn suite() -> Suite {
         .cacheable(CONTRAST)
         .cacheable(CONFIG)
         .cacheable(PRESENTATION)
+        // Reads this process's config home while it builds, so it is not
+        // configuration-free and the host names it (see the file docs).
+        .host_named_space("ikigai_a11y::space()", ikigai_a11y::space())
 }
 
 /// Run `suite` over a fresh seeded home, clean up, and hand back the report.
+///
+/// The space under test is built once and handed to both the kernel and the
+/// suite, so the host-named declaration is about the very instance the walk
+/// resolved through.
 fn run(suite: Suite) -> Report {
     let home = seeded_home();
-    let report = suite.run_blocking(&kernel(&home));
+    let space = space_over(&home);
+    let kernel = Kernel::new(space.clone());
+    let report = suite
+        .host_named_space("ikigai_a11y::space_with(handle)", space)
+        .run_blocking(&kernel);
     std::fs::remove_dir_all(&home).ok();
     report
 }
@@ -146,6 +172,22 @@ fn conforms() {
     assert_eq!(
         report.checks.skipped().collect::<Vec<_>>(),
         vec![Check::Names],
+        "{report}"
+    );
+    // Both constructors were declared, and both as host-named: a constructor
+    // missing here is one `SPACE-NAME` held to nothing.
+    let spaces: Vec<_> = report
+        .declared
+        .spaces
+        .iter()
+        .map(|s| (s.label.as_str(), s.naming))
+        .collect();
+    assert_eq!(
+        spaces,
+        vec![
+            ("ikigai_a11y::space()", SpaceNaming::HostNamed),
+            ("ikigai_a11y::space_with(handle)", SpaceNaming::HostNamed),
+        ],
         "{report}"
     );
 }
