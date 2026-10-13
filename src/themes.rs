@@ -102,7 +102,7 @@ pub fn identifier(theme: EmbeddedThemeName) -> &'static str {
 
 /// The embedded theme a configured name refers to, accepting either spelling
 /// (`Base16OceanDark` or `base16-ocean.dark`). `None` for a name no theme
-/// answers to — the same verdict [`crate::config`] reaches without this feature.
+/// answers to — the same verdict [`crate::config`](mod@crate::config) reaches without this feature.
 pub fn embedded(name: &str) -> Option<EmbeddedThemeName> {
     let canonical = canonical_theme(name)?;
     ALL.iter().copied().find(|t| identifier(*t) == canonical)
