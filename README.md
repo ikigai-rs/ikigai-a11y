@@ -294,7 +294,9 @@ no opt-outs: `tests/conformance.rs` mounts `space_with` over a fresh temporary
 config home it seeds (a shared layer plus one app override, so the graph face
 is exercised with both layer roles) and runs every check — ArgSpec
 completeness, declared = enforced via `urn:cap:a11y:read`, the skolemized
-Turtle face against `ikigai-vocab`, cacheability, pipeline citizenship. The
+Turtle face against `ikigai-vocab`, cacheability, pipeline citizenship,
+required inputs (`urn:a11y:contrast` refuses a call missing `from` or `on` with a
+typed `MissingArgument`, as `REQUIRED` checks), and names an IRI can carry. The
 config views are declared `cacheable` and held to it; they are deliberately
 **not** declared `pure` — their results depend on the files — so a cached
 config with no golden thread but its own name would fail the test.
