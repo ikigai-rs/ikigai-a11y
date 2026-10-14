@@ -15,7 +15,10 @@
 //!   kernel hangs on every cacheable answer since ikigai-core 0.1.73; before
 //!   that the set was empty). It also needs a
 //!   [`Fixture`]: its inputs are `xsd:string`s with a lexical form (`#rrggbb`)
-//!   the suite's minimal `x` does not satisfy.
+//!   the suite's minimal `x` does not satisfy. Its `from` and `on` are the
+//!   only inputs in this module declared required by value, so they are what
+//!   `REQUIRED` (ikigai-conformance 0.8) drops, one at a time: each drop must
+//!   be refused with a typed `MissingArgument`, never defaulted.
 //! - `a11yConfig` and `a11yPresentation` are `cacheable` and deliberately NOT
 //!   `pure`: both read the layered files, and both declare a thread per
 //!   candidate file (`urn:file:/abs/…/a11y.toml`, existing or not). Declared
