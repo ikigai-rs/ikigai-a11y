@@ -256,7 +256,7 @@ after a reported barrier is fixed, and before any conformance claim.
 | 2026-08-15 | The crate: WCAG math, the layered config, the floor pass | the first commit |
 | 2026-08-15 | The ungated presentation view; person facts stay behind the capability | PR #2 |
 | 2026-08-23 | The endpoints take their config home, so the tests own the files they read | PR #4 |
-| 2026-10-15 | This file | this pull request |
+| 2026-10-15 | This file | PR #16 |
 
 ## References
 
