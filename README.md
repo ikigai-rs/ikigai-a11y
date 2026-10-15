@@ -323,6 +323,12 @@ The default build is wasm-clean; `themes` is off by default because `two-face`
 carries ~2MB of embedded theme data a browser consumer of the pure halves has no
 use for.
 
+## Accessibility
+
+[ACCESSIBILITY.md](ACCESSIBILITY.md) says what this crate guarantees to the hosts that use it,
+what it does not check, how it is tested, the gaps we know about (among them, the themes the
+floor pass cannot fully repair), and how to report a barrier.
+
 ## Licence
 
 MIT OR Apache-2.0.
