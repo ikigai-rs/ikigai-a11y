@@ -308,8 +308,8 @@ pub fn config() -> FnEndpoint {
 /// layered within the handle's config home.
 #[cfg(not(target_family = "wasm"))]
 pub fn config_with(handle: Arc<A11yHandle>) -> FnEndpoint {
-    FnEndpoint::new("a11yConfig", move |inv| config_impl(&handle, inv)).with_description(
-        Description::new("a11yConfig")
+    FnEndpoint::new("a11y-config", move |inv| config_impl(&handle, inv)).with_description(
+        Description::new("a11y-config")
             .title("Effective accessibility config")
             .summary(
                 "The merged accessibility settings for this machine and, with `{app}`, for one \
@@ -384,11 +384,11 @@ pub fn presentation() -> FnEndpoint {
 /// of the effective config, ungated, layered within the handle's config home.
 #[cfg(not(target_family = "wasm"))]
 pub fn presentation_with(handle: Arc<A11yHandle>) -> FnEndpoint {
-    FnEndpoint::new("a11yPresentation", move |inv| {
+    FnEndpoint::new("a11y-presentation", move |inv| {
         presentation_impl(&handle, inv)
     })
     .with_description(
-        Description::new("a11yPresentation")
+        Description::new("a11y-presentation")
             .title("Effective accessibility config: the rendering half")
             .summary(
                 "How this deployment draws a page — the configured light and dark themes, both \
@@ -477,8 +477,8 @@ fn contrast_impl(inv: &Invocation<'_>) -> Result<Representation> {
 /// `urn:a11y:contrast` — the WCAG ratio between two colours and whether it
 /// clears a floor.
 pub fn contrast() -> FnEndpoint {
-    FnEndpoint::new("a11yContrast", contrast_impl).with_description(
-        Description::new("a11yContrast")
+    FnEndpoint::new("a11y-contrast", contrast_impl).with_description(
+        Description::new("a11y-contrast")
             .title("WCAG contrast ratio")
             .summary(
                 "The WCAG 2.x contrast ratio between two colours (1.0–21.0) and whether it \
