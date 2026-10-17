@@ -300,9 +300,10 @@ typed `MissingArgument`, as `REQUIRED` checks), and names an IRI can carry. The
 config views are declared `cacheable` and held to it; they are deliberately
 **not** declared `pure` — their results depend on the files — so a cached
 config with no golden thread but its own name would fail the test.
-`urn:a11y:contrast` is declared both, being arithmetic over its arguments. One
-check is skipped, and the report says so: `NAMES`, because the three ids are
-live MCP tool names and are renamed in one coordinated pass across every module.
+`urn:a11y:contrast` is declared both, being arithmetic over its arguments. No
+check is skipped: since 0.3.0 the three ids are kebab-case nouns (`a11y-config`,
+`a11y-presentation`, `a11y-contrast`), so `NAMES` runs too. They are live MCP
+tool names; CHANGELOG.md lists the rename.
 
 **The space has no name of its own; the host names it.** Both constructors are
 declared host-named to `SPACE-NAME`: `space_with(handle)` serves whatever home it

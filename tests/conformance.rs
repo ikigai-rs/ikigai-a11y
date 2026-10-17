@@ -9,7 +9,7 @@
 //!
 //! ## Declarations, and why each
 //!
-//! - `a11yContrast` is `pure` AND `cacheable`: WCAG arithmetic over two colours
+//! - `a11y-contrast` is `pure` AND `cacheable`: WCAG arithmetic over two colors
 //!   the caller supplies, no file, clock or platform read, so its cacheable
 //!   result rightly carries no golden thread but its own name (which the
 //!   kernel hangs on every cacheable answer since ikigai-core 0.1.73; before
@@ -19,7 +19,7 @@
 //!   only inputs in this module declared required by value, so they are what
 //!   `REQUIRED` (ikigai-conformance 0.8) drops, one at a time: each drop must
 //!   be refused with a typed `MissingArgument`, never defaulted.
-//! - `a11yConfig` and `a11yPresentation` are `cacheable` and deliberately NOT
+//! - `a11y-config` and `a11y-presentation` are `cacheable` and deliberately NOT
 //!   `pure`: both read the layered files, and both declare a thread per
 //!   candidate file (`urn:file:/abs/…/a11y.toml`, existing or not). Declared
 //!   cacheable, the suite holds them to a cache hit on the second resolution
@@ -27,13 +27,11 @@
 //!   downgraded the effective expiry, or a refactor that dropped `depends_on`,
 //!   is a red test rather than a ~40× slowdown (README, "Cacheability") or a
 //!   config served forever.
-//! - `NAMES` is skipped suite-wide, not opted out per id: the three ids
-//!   (`a11yConfig`, `a11yPresentation`, `a11yContrast`) are live MCP tool names
-//!   and are renamed in one coordinated pass (wave two, owned by
-//!   `ikigai-core-PENDING.md` §1). `Suite::opt_out` cannot carry this — it
-//!   excludes an endpoint from the INVOKING checks and leaves NAMES running —
-//!   so dropping the check is the only spelling, and the report prints it as
-//!   skipped.
+//! - Every check runs, `NAMES` included: the three ids (`a11y-config`,
+//!   `a11y-presentation`, `a11y-contrast`) are kebab-case nouns since the
+//!   naming wave (ledger #11) renamed them from `a11yConfig`,
+//!   `a11yPresentation` and `a11yContrast`. They are live MCP tool names, so
+//!   the rename was a breaking change (see CHANGELOG.md, "Renamed").
 //! - Both space constructors are declared **host-named** (`SPACE-NAME`, ledger
 //!   #987): neither is configuration-free, so neither may claim
 //!   `urn:iki:space:a11y`. `space_with(handle)` serves whatever config home it
@@ -58,16 +56,16 @@
 //! and the name this module declares IS the name a cut is keyed on.
 
 use ikigai_a11y::{A11yHandle, CONFIG_IRI};
-use ikigai_conformance::{Check, Checks, Fixture, Report, SpaceNaming, Suite};
+use ikigai_conformance::{Check, Fixture, Report, SpaceNaming, Suite};
 use ikigai_core::{ArgRef, Capability, EndpointSpace, Iri, Kernel, Request, Verb};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 /// The three endpoints `space_with` binds, by description id.
-const CONTRAST: &str = "a11yContrast";
-const CONFIG: &str = "a11yConfig";
-const PRESENTATION: &str = "a11yPresentation";
+const CONTRAST: &str = "a11y-contrast";
+const CONFIG: &str = "a11y-config";
+const PRESENTATION: &str = "a11y-presentation";
 
 /// The application whose override layer the seeded home carries, and what the
 /// `{app}` template variable is bound to on every fired action — so the graph
@@ -116,8 +114,6 @@ fn kernel(home: &Path) -> Kernel {
 /// The suite, configured for this module (see the file docs for why each line).
 fn suite() -> Suite {
     Suite::new()
-        // Wave two: ids are live MCP tool names, renamed in one coordinated pass.
-        .checks(Checks::all() - Checks::NAMES)
         .fixture(
             Fixture::new(CONTRAST, Verb::Source)
                 .arg("from", "#000000")
@@ -170,11 +166,11 @@ fn conforms() {
         report.actions, 5,
         "one Source per bound entry (two spellings of each config view): {report}"
     );
-    // The ONLY skipped check is NAMES; anything else dropped here is a gate
-    // silently covering less than it looks like it does.
+    // No check is skipped; anything dropped here is a gate silently covering
+    // less than it looks like it does.
     assert_eq!(
         report.checks.skipped().collect::<Vec<_>>(),
-        vec![Check::Names],
+        Vec::<Check>::new(),
         "{report}"
     );
     // Both constructors were declared, and both as host-named: a constructor
