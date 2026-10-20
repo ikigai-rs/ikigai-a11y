@@ -48,10 +48,12 @@ themes = ["dep:two-face", "dep:syntect"]
 futures = "0.3"
 # The module recipe as one test (`tests/conformance.rs`): walks every bound
 # endpoint and reports every violation at once. 0.6.0 added `SPACE-NAME`, which
-# the test declares both constructors to; 0.7 added `VALIDATE` and 0.8 adds
-# `REQUIRED`. A caret on 0.x is a CEILING as well as a floor (`"0.8.0"` admits
-# only 0.8.*): raise it deliberately when 0.9 ships.
-ikigai-conformance = "0.8.0"
+# the test declares both constructors to; 0.7 added `VALIDATE`, 0.8 `REQUIRED`,
+# 0.9 the contract-shape checks (core 0.1.105) and `RECOMPUTE`, and 0.10 adds
+# `FAILURES`, which stays off until a suite opts in. A caret on 0.x is a CEILING
+# as well as a floor (`"0.10.0"` reads as `>=0.10.0, <0.11.0`): raise it
+# deliberately when 0.11 ships.
+ikigai-conformance = "0.10.0"
 
 [[example]]
 name = "theme_survey"

@@ -56,7 +56,7 @@
 //! and the name this module declares IS the name a cut is keyed on.
 
 use ikigai_a11y::{A11yHandle, CONFIG_IRI};
-use ikigai_conformance::{Check, Fixture, Report, SpaceNaming, Suite};
+use ikigai_conformance::{Fixture, Report, SpaceNaming, Suite};
 use ikigai_core::{ArgRef, Capability, EndpointSpace, Iri, Kernel, Request, Verb};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -166,12 +166,17 @@ fn conforms() {
         report.actions, 5,
         "one Source per bound entry (two spellings of each config view): {report}"
     );
-    // No check is skipped; anything dropped here is a gate silently covering
-    // less than it looks like it does.
+    // FAILURES is off unless a suite opts in (`check_failures()`, the next wave);
+    // it is the only check allowed to be skipped. Anything else dropped here is a
+    // gate silently covering less than it looks like it does.
     assert_eq!(
-        report.checks.skipped().collect::<Vec<_>>(),
-        Vec::<Check>::new(),
-        "{report}"
+        report
+            .checks
+            .skipped()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>(),
+        ["FAILURES"],
+        "every check but FAILURES runs: {report}"
     );
     // Both constructors were declared, and both as host-named: a constructor
     // missing here is one `SPACE-NAME` held to nothing.
