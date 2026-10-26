@@ -166,17 +166,11 @@ fn conforms() {
         report.actions, 5,
         "one Source per bound entry (two spellings of each config view): {report}"
     );
-    // FAILURES is off unless a suite opts in (`check_failures()`, the next wave);
-    // it is the only check allowed to be skipped. Anything else dropped here is a
-    // gate silently covering less than it looks like it does.
-    assert_eq!(
-        report
-            .checks
-            .skipped()
-            .map(|c| c.to_string())
-            .collect::<Vec<_>>(),
-        ["FAILURES"],
-        "every check but FAILURES runs: {report}"
+    // DATATYPES and FAILURES run by default in 0.11. No check may be
+    // skipped: an opt-out would silently reduce the gate's coverage.
+    assert!(
+        report.checks.skipped().next().is_none(),
+        "every check runs: {report}"
     );
     // Both constructors were declared, and both as host-named: a constructor
     // missing here is one `SPACE-NAME` held to nothing.
