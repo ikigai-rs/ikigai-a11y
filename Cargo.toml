@@ -1,6 +1,6 @@
 [package]
 name = "ikigai-a11y"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Accessibility as a resolvable ikigai resource: the layered a11y config (a11y.toml ⊕ {app}.a11y.toml), WCAG contrast math, and a contrast-floor pass that repairs a syntax theme's own CSS in its own palette."
@@ -14,13 +14,9 @@ categories = ["accessibility", "wasm"]
 [dependencies]
 # The released kernel, consumed from crates.io — the SAME version the hosts use,
 # so a host links exactly one `ikigai-core` (no duplicate-crate type mismatch).
-# 0.1.100 is the floor every test here runs against: `ikigai-conformance` 0.8
-# (the dev-dependency below) needs it, so nothing older is ever built in CI. The
-# API this crate's src calls is older (`config_home` / `layered_paths`, the path
-# algebra it reads, parses and merges, arrived in 0.1.56), but a floor no test
-# compiles against is a claim, not a minimum. A caret on 0.1.x is also a ceiling
-# (`<0.2.0`); the kernel is still on the 0.1 line, so this admits every release.
-ikigai-core = "0.1.100"
+# 0.2.0 is the streams release (ledger #2261). The old 0.1 pin meant
+# <0.2.0 under Cargo's 0.x compatibility rules.
+ikigai-core = "0.2.0"
 serde = { version = "1", features = ["derive"] }
 # Pure-Rust, wasm-clean: the config half compiles to wasm32-unknown-unknown.
 toml = "0.8"
@@ -47,13 +43,9 @@ themes = ["dep:two-face", "dep:syntect"]
 [dev-dependencies]
 futures = "0.3"
 # The module recipe as one test (`tests/conformance.rs`): walks every bound
-# endpoint and reports every violation at once. 0.6.0 added `SPACE-NAME`, which
-# the test declares both constructors to; 0.7 added `VALIDATE`, 0.8 `REQUIRED`,
-# 0.9 the contract-shape checks (core 0.1.105) and `RECOMPUTE`, and 0.10 adds
-# `FAILURES`, which stays off until a suite opts in. A caret on 0.x is a CEILING
-# as well as a floor (`"0.10.0"` reads as `>=0.10.0, <0.11.0`): raise it
-# deliberately when 0.11 ships.
-ikigai-conformance = "0.10.0"
+# endpoint and reports every violation at once. 0.11 runs DATATYPES and
+# FAILURES by default and uses the core 0.2.0 streams release.
+ikigai-conformance = "0.11.0"
 
 [[example]]
 name = "theme_survey"

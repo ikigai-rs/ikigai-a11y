@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+### Changed
+
+- **Breaking:** move to `ikigai-core` 0.2.0, the streams release (ledger #2261).
+  Consumers must use core 0.2 because core types appear in this crate's public API.
+- Upgrade `ikigai-conformance` to 0.11.0 and require every check to run, including
+  the default DATATYPES and FAILURES checks.
+
 ## 0.3.0
 
 ### Renamed
