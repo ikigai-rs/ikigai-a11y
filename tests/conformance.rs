@@ -134,12 +134,15 @@ fn suite() -> Suite {
 ///
 /// The space under test is built once and handed to both the kernel and the
 /// suite, so the host-named declaration is about the very instance the walk
-/// resolved through.
+/// resolved through. The same space also lets BODIES compare direct endpoint
+/// invocation with body invocation. No argument declares `reads_body`, so
+/// BODY-INPUTS has no candidates and needs no content store.
 fn run(suite: Suite) -> Report {
     let home = seeded_home();
     let space = space_over(&home);
     let kernel = Kernel::new(space.clone());
     let report = suite
+        .body_space(space.clone())
         .host_named_space("ikigai_a11y::space_with(handle)", space)
         .run_blocking(&kernel);
     std::fs::remove_dir_all(&home).ok();
@@ -166,7 +169,11 @@ fn conforms() {
         report.actions, 5,
         "one Source per bound entry (two spellings of each config view): {report}"
     );
-    // DATATYPES and FAILURES run by default in 0.11. No check may be
+    assert!(
+        report.unprobed.is_empty(),
+        "every check is probed: {report}"
+    );
+    // BODIES and BODY-INPUTS also run by default in 0.12. No check may be
     // skipped: an opt-out would silently reduce the gate's coverage.
     assert!(
         report.checks.skipped().next().is_none(),
