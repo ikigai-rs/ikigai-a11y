@@ -52,7 +52,9 @@ These are the behaviors a host can rely on. Each is pinned by a test named under
 - **The floor pass repairs in the theme's own palette.** `css::apply_floor` (and
   `themes::theme_css` with feature `themes`) lifts every `color:` declaration below the floor to
   the theme's own default foreground, measured against the rule's own `background-color` when it
-  sets one and the theme's ground otherwise. It reaches rules nested in `@media` blocks, leaves
+  sets one and the theme's ground otherwise. When a rule declares either property more than once,
+  the pass reads the one CSS applies: the last `!important` declaration if there is one, otherwise
+  the last. It reaches rules nested in `@media` blocks, leaves
   every other byte unchanged, and is idempotent. A rule it cannot repair (because the foreground
   would not clear the floor on that ground either) is left as the theme wrote it and listed in
   `unrepaired`; a value it cannot read is left as written and listed by `skipped()`. Nothing is

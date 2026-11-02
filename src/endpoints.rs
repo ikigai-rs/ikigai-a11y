@@ -107,6 +107,12 @@ fn plain() -> ReprType {
 /// A config failure as a kernel error. Every one of these is **permanent** — a
 /// misspelled theme does not become correct on retry — so none of them are
 /// `Unavailable`.
+///
+/// Nor are they `InvalidArgument`, even when a value is out of range (ledger
+/// #2909): that variant blames an argument of the REQUEST, and an HTTP edge
+/// answers it 400, but none of these is in the request. The file is the host's,
+/// so the fault is the host's, and `Endpoint` (500) says so. The message names the
+/// file or the field, which is what the operator who can fix it needs.
 #[cfg(not(target_family = "wasm"))]
 fn config_error(e: ConfigError) -> Error {
     Error::Endpoint(e.to_string())
@@ -1019,6 +1025,30 @@ mod tests {
                     assert!(message.contains("Base16OceanDrak"), "{message}")
                 }
                 other => panic!("{other:?}"),
+            }
+        }
+
+        /// A floor set below WCAG AA in the host's file is the HOST's mistake, not
+        /// the caller's (ledger #2909): the request names no `contrast.min`, so it
+        /// is `Endpoint` (an HTTP edge answers 500), never `InvalidArgument` (400,
+        /// "fix your request"). The message still names the field and the floor.
+        #[test]
+        fn a_floor_below_aa_in_the_file_is_the_hosts_error_not_the_callers() {
+            let home = Scratch::new("lowfloor");
+            home.write(STEM, "[contrast]\nmin = 3.0\n");
+            let nothing = Capability::scoped(Vec::<String>::new());
+            for (ep, resource, cap) in [
+                (config_with(over(&home)), CONFIG_IRI, Capability::root()),
+                (presentation_with(over(&home)), PRESENTATION_IRI, nothing),
+            ] {
+                let request = Request::new(Verb::Source, iri(resource));
+                match invoke(&ep, request, &cap) {
+                    Err(Error::Endpoint(message)) => {
+                        assert!(message.contains("contrast.min"), "{message}");
+                        assert!(message.contains("WCAG AA"), "{message}");
+                    }
+                    other => panic!("{other:?}"),
+                }
             }
         }
 

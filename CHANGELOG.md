@@ -32,6 +32,11 @@
 
 ### Fixed
 
+- The floor pass reads the declaration CSS applies when a rule declares `color` or
+  `background-color` more than once (ledger #2908): the last `!important` one if there is one,
+  otherwise the last. Before, it read the first, so `color: #c0c5ce; color: #bf616a` was judged by
+  the overridden color and the one that renders was never lifted, and the converse rewrote a dead
+  declaration. `skipped()` lists the applied value by the same reading.
 - `Rgba::parse` strips exactly one leading `#` (ledger #2907): `##fff` was read as white and is
   now an error.
 - American spelling throughout the code, tests, endpoint descriptions and README ("color", not
