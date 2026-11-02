@@ -414,4 +414,40 @@ mod tests {
         assert_eq!(pass.lifted.len(), 1);
         assert!((pass.lifted[0].ratio - 1.0).abs() < 1e-6);
     }
+
+    /// A tint written as `rgba(…)` is measured like its hex spelling (ledger
+    /// #2904): ikigai-browse once had to rewrite its tints as `#rrggbbaa`
+    /// because the pass could not read them, and an unreadable value is
+    /// silently skipped.
+    #[test]
+    fn a_functional_rgb_color_is_measured_like_its_hex_spelling() {
+        let (ground, foreground) = dark();
+        let functional = apply_floor(
+            ".hl-tint {\n color: rgba(255, 255, 255, 0.1);\n}\n",
+            ground,
+            foreground,
+            4.5,
+        );
+        let hex = apply_floor(
+            ".hl-tint {\n color: #ffffff1a;\n}\n",
+            ground,
+            foreground,
+            4.5,
+        );
+        assert_eq!(functional.lifted.len(), 1, "{functional:?}");
+        assert!((functional.lifted[0].ratio - hex.lifted[0].ratio).abs() < 1e-9);
+        assert_eq!(
+            functional.css, hex.css,
+            "both lift to the same hex foreground"
+        );
+
+        // And a rule's own ground written that way is the ground it is judged on.
+        let grounded = apply_floor(
+            ".hl-x {\n background-color: rgb(192 197 206);\n color: #c0c5ce;\n}\n",
+            ground,
+            foreground,
+            4.5,
+        );
+        assert_eq!(grounded.unrepaired.len(), 1, "{grounded:?}");
+    }
 }

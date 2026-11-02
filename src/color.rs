@@ -49,7 +49,8 @@ impl fmt::Display for ParseColorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "expected a hex colour (#rgb, #rgba, #rrggbb or #rrggbbaa), got {:?}",
+            "expected a hex color (#rgb, #rgba, #rrggbb or #rrggbbaa) or a CSS rgb()/rgba() \
+             color, got {:?}",
             self.input
         )
     }
@@ -68,19 +69,40 @@ impl Rgba {
         }
     }
 
-    /// Parse a CSS hex colour: `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`. The
-    /// leading `#` is optional and case does not matter.
+    /// Parse a CSS color in one of two notations:
     ///
-    /// Named CSS colours (`red`, `transparent`) are deliberately NOT accepted: the
-    /// producers this crate reads — syntect's CSS generator and an operator's
-    /// `a11y.toml` — emit hex, and silently accepting a subset of the named
-    /// palette would make the failure mode "some names work" rather than "names
-    /// don't".
+    /// - **hex**: `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`. The leading `#` is
+    ///   optional and case does not matter.
+    /// - **`rgb()`/`rgba()`**, as CSS Color 4 §5.1 defines them (the two names
+    ///   are aliases): the legacy comma form, whose three channels are all
+    ///   numbers or all percentages, with an optional fourth alpha; and the
+    ///   modern space form, which may mix them, accepts `none` (zero), and takes
+    ///   alpha after a `/`. Alpha is a number (0–1) or a percentage. Out-of-range
+    ///   values clamp, as CSS says they do, and fractional channels round to the
+    ///   nearest 8-bit step.
+    ///
+    /// ```
+    /// use ikigai_a11y::Rgba;
+    /// let tint = Rgba { r: 255, g: 255, b: 255, alpha: 0x80 };
+    /// assert_eq!(Rgba::parse("#ffffff80"), Ok(tint));
+    /// assert_eq!(Rgba::parse("rgba(255, 255, 255, 0.5)"), Ok(tint));
+    /// assert_eq!(Rgba::parse("rgb(100% 100% 100% / 50%)"), Ok(tint));
+    /// assert!(Rgba::parse("red").is_err());
+    /// ```
+    ///
+    /// Named CSS colors (`red`, `transparent`) are deliberately NOT accepted, nor
+    /// `hsl()`, `var()`, `calc()` or relative colors: silently accepting a subset
+    /// of the named palette would make the failure mode "some names work" rather
+    /// than "names don't".
     pub fn parse(text: &str) -> Result<Self, ParseColorError> {
         let fail = || ParseColorError {
             input: text.to_string(),
         };
-        let hex = text.trim().trim_start_matches('#');
+        let trimmed = text.trim();
+        if let Some(args) = rgb_arguments(trimmed) {
+            return rgb_function(args).ok_or_else(fail);
+        }
+        let hex = trimmed.trim_start_matches('#');
         if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(fail());
         }
@@ -168,6 +190,150 @@ impl Rgba {
     }
 }
 
+// CSS Color 4 `rgb()`/`rgba()`, implemented here rather than borrowed: no crate in
+// this dependency graph parses CSS colors (syntect reads tmTheme hex only), and
+// adding a CSS parser (cssparser, csscolorparser) would pull a tokenizer and the
+// whole named palette into a crate that compiles to wasm and deliberately refuses
+// names. The grammar is small; the vectors in the tests below pin it.
+
+/// The text between the parentheses of `rgb(…)` or `rgba(…)` (the function name
+/// in any case), or `None` when `text` is not such a call.
+fn rgb_arguments(text: &str) -> Option<&str> {
+    let body = text.strip_suffix(')')?;
+    ["rgba(", "rgb("].into_iter().find_map(|name| {
+        let head = body.get(..name.len())?;
+        head.eq_ignore_ascii_case(name).then(|| &body[name.len()..])
+    })
+}
+
+/// One `rgb()` argument as written.
+#[derive(Clone, Copy)]
+enum Component {
+    Number(f64),
+    Percent(f64),
+    /// The modern form's missing component, which resolves to zero.
+    Missing,
+}
+
+impl Component {
+    fn read(token: &str) -> Option<Self> {
+        if token.eq_ignore_ascii_case("none") {
+            return Some(Component::Missing);
+        }
+        match token.strip_suffix('%') {
+            Some(number) => css_number(number).map(Component::Percent),
+            None => css_number(token).map(Component::Number),
+        }
+    }
+
+    /// A color channel: a number on the 0–255 scale, or a percentage of it.
+    fn channel(self) -> u8 {
+        let value = match self {
+            Component::Number(n) => n,
+            Component::Percent(p) => p / 100.0 * 255.0,
+            Component::Missing => 0.0,
+        };
+        value.clamp(0.0, 255.0).round() as u8
+    }
+
+    /// An alpha: a number on the 0–1 scale, or a percentage of it.
+    fn alpha(self) -> u8 {
+        let value = match self {
+            Component::Number(n) => n,
+            Component::Percent(p) => p / 100.0,
+            Component::Missing => 0.0,
+        };
+        (value.clamp(0.0, 1.0) * 255.0).round() as u8
+    }
+}
+
+/// A CSS `<number-token>`: an optional sign, digits with an optional fraction
+/// (`.5` is a number, `5.` is not), and an optional exponent. Stricter than
+/// `f64::from_str`, which also takes `5.`, `inf` and `NaN`.
+fn css_number(token: &str) -> Option<f64> {
+    let bytes = token.as_bytes();
+    let digits_from = |mut i: usize| {
+        while bytes.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+        i
+    };
+    let mut i = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let integer_end = digits_from(i);
+    let mut seen_digits = integer_end > i;
+    i = integer_end;
+    if bytes.get(i) == Some(&b'.') {
+        let fraction_end = digits_from(i + 1);
+        if fraction_end == i + 1 {
+            return None;
+        }
+        seen_digits = true;
+        i = fraction_end;
+    }
+    if !seen_digits {
+        return None;
+    }
+    if matches!(bytes.get(i), Some(b'e' | b'E')) {
+        i += 1;
+        i += usize::from(matches!(bytes.get(i), Some(b'+' | b'-')));
+        let exponent_end = digits_from(i);
+        if exponent_end == i {
+            return None;
+        }
+        i = exponent_end;
+    }
+    // A huge exponent reads as infinity, which clamps like any out-of-range value.
+    (i == bytes.len()).then(|| token.parse().ok()).flatten()
+}
+
+/// The arguments of `rgb()`/`rgba()`: the comma form when there is a comma,
+/// otherwise the space form.
+fn rgb_function(args: &str) -> Option<Rgba> {
+    let (channels, alpha) = if args.contains(',') {
+        let parts: Vec<&str> = args.split(',').map(str::trim).collect();
+        if !(3..=4).contains(&parts.len()) {
+            return None;
+        }
+        let channels = [parts[0], parts[1], parts[2]].map(Component::read);
+        let channels = [channels[0]?, channels[1]?, channels[2]?];
+        // The legacy form takes all numbers or all percentages, and no `none`.
+        let all_numbers = channels.iter().all(|c| matches!(c, Component::Number(_)));
+        let all_percents = channels.iter().all(|c| matches!(c, Component::Percent(_)));
+        if !(all_numbers || all_percents) {
+            return None;
+        }
+        let alpha = match parts.get(3) {
+            None => None,
+            Some(token) => match Component::read(token)? {
+                Component::Missing => return None,
+                alpha => Some(alpha),
+            },
+        };
+        (channels, alpha)
+    } else {
+        let (channels, alpha) = match args.split_once('/') {
+            Some((channels, alpha)) => (channels, Some(Component::read(alpha.trim())?)),
+            None => (args, None),
+        };
+        let parts: Vec<&str> = channels.split_ascii_whitespace().collect();
+        let [r, g, b] = parts[..] else {
+            return None;
+        };
+        let channels = [
+            Component::read(r)?,
+            Component::read(g)?,
+            Component::read(b)?,
+        ];
+        (channels, alpha)
+    };
+    Some(Rgba {
+        r: channels[0].channel(),
+        g: channels[1].channel(),
+        b: channels[2].channel(),
+        alpha: alpha.map_or(0xff, Component::alpha),
+    })
+}
+
 impl fmt::Display for Rgba {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.to_css())
@@ -240,9 +406,109 @@ mod tests {
     }
 
     #[test]
-    fn a_colour_that_is_not_hex_is_an_error_not_a_guess() {
-        for bad in ["red", "#12345", "", "#gggggg", "rgb(1,2,3)"] {
+    fn a_color_this_crate_does_not_read_is_an_error_not_a_guess() {
+        for bad in [
+            "red",
+            "#12345",
+            "",
+            "#gggggg",
+            "transparent",
+            "hsl(0 0% 0%)",
+        ] {
             assert!(Rgba::parse(bad).is_err(), "{bad:?} must not parse");
+        }
+    }
+
+    /// CSS Color 4 §5.1 `rgb()`/`rgba()`, as `(input, r, g, b, alpha)`. The two
+    /// names are aliases; the legacy form is comma-separated with channels all
+    /// numbers or all percentages, the modern form is space-separated with an
+    /// optional `/ alpha` and may mix them. Out-of-range values clamp, fractional
+    /// ones round to the nearest 8-bit step, and alpha is a number or a percentage.
+    const RGB_VECTORS: &[(&str, u8, u8, u8, u8)] = &[
+        // Legacy (comma) syntax.
+        ("rgb(255, 0, 0)", 255, 0, 0, 255),
+        ("rgb(1,2,3)", 1, 2, 3, 255),
+        ("rgba(255, 255, 255, 0.5)", 255, 255, 255, 128),
+        ("rgba(0, 0, 0, .25)", 0, 0, 0, 64),
+        ("rgba(0, 0, 0, 25%)", 0, 0, 0, 64),
+        ("rgb(1, 2, 3, 0.5)", 1, 2, 3, 128),
+        ("rgba(1, 2, 3)", 1, 2, 3, 255),
+        ("rgb(100%, 50%, 0%)", 255, 128, 0, 255),
+        ("rgb( 10 , 20 , 30 )", 10, 20, 30, 255),
+        // Modern (space) syntax.
+        ("rgb(255 0 0)", 255, 0, 0, 255),
+        ("rgb(255 0 0 / 50%)", 255, 0, 0, 128),
+        ("rgb(255 0 0/0.25)", 255, 0, 0, 64),
+        ("rgba(1 2 3)", 1, 2, 3, 255),
+        ("rgba(1 2 3 / 1)", 1, 2, 3, 255),
+        ("rgb(100% 0 0)", 255, 0, 0, 255),
+        ("rgb(none 2 3)", 0, 2, 3, 255),
+        ("rgb(1 2 3 / none)", 1, 2, 3, 0),
+        // Case, surrounding space, number syntax.
+        ("RGB(1, 2, 3)", 1, 2, 3, 255),
+        ("RgBa(1 2 3 / 0)", 1, 2, 3, 0),
+        ("  rgb(1 2 3)  ", 1, 2, 3, 255),
+        ("rgb(1e2 +5 0.4)", 100, 5, 0, 255),
+        ("rgb(127.5 0 0)", 128, 0, 0, 255),
+        // Clamping, not refusal.
+        ("rgb(300, -20, 0)", 255, 0, 0, 255),
+        ("rgb(150% -5% 0%)", 255, 0, 0, 255),
+        ("rgb(0 0 0 / 2)", 0, 0, 0, 255),
+        ("rgb(0 0 0 / -1)", 0, 0, 0, 0),
+        ("rgba(0, 0, 0, 120%)", 0, 0, 0, 255),
+    ];
+
+    #[test]
+    fn css_color_4_rgb_and_rgba_parse_to_their_vectors() {
+        for &(input, r, g, b, alpha) in RGB_VECTORS {
+            let want = Rgba { r, g, b, alpha };
+            assert_eq!(Rgba::parse(input), Ok(want), "{input:?}");
+        }
+    }
+
+    /// What the grammar refuses: a malformed function is an error, never a
+    /// guess, for the same reason a malformed hex color is.
+    #[test]
+    fn a_malformed_rgb_function_is_an_error() {
+        for bad in [
+            "rgb()",
+            "rgb(1, 2)",
+            "rgb(1 2)",
+            "rgb(1, 2, 3, 4, 5)",
+            "rgb(1 2 3 4)",
+            "rgb(1, 2 3)",
+            "rgb(1 2, 3)",
+            "rgb(1, 2, 3 / 0.5)",
+            "rgb(1 2 3 / )",
+            "rgb(1 2 3 / 0.5 / 1)",
+            "rgb(1 2 3, 0.5)",
+            "rgb(1,,2,3)",
+            "rgb(1, 2, 3,)",
+            "rgb(1,2,3",
+            "rgb 1,2,3",
+            "rgb(1 2 3)x",
+            "rgbx(1 2 3)",
+            "rgb(none, 0, 0)",
+            "rgb(100%, 0, 0)",
+            "rgb(1px 2 3)",
+            "rgb(5. 0 0)",
+            "rgb(. 0 0)",
+            "rgb(1e 0 0)",
+            "rgb(calc(1) 2 3)",
+            "rgb(from red r g b)",
+            "rgb(1 2 3 / 50%%)",
+        ] {
+            assert!(Rgba::parse(bad).is_err(), "{bad:?} must not parse");
+        }
+    }
+
+    /// A refusal names the forms that would have worked, so an operator who
+    /// mistyped a color in `a11y.toml` can fix it from the message alone.
+    #[test]
+    fn the_refusal_names_every_accepted_form() {
+        let message = Rgba::parse("red").unwrap_err().to_string();
+        for form in ["#rrggbb", "rgb(", "rgba("] {
+            assert!(message.contains(form), "{message}");
         }
     }
 
