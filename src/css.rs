@@ -274,10 +274,24 @@ struct Decl {
     value: std::ops::Range<usize>,
 }
 
-/// Find `property`'s value span in a declaration block body, matching the
-/// property name EXACTLY — `color` must not match `background-color`, which is
-/// the whole difficulty of doing this with string search.
+/// Find the value span of the `property` declaration that CSS applies in a
+/// declaration block body, matching the property name EXACTLY — `color` must not
+/// match `background-color`, which is the whole difficulty of doing this with
+/// string search.
+///
+/// The declaration that applies is the cascade's within one block (ledger
+/// #2908): the LAST `!important` one if there is any, otherwise the LAST one. An
+/// earlier declaration is overridden and never renders, so measuring it would
+/// judge a color nobody sees and lift one that changes nothing.
+///
+/// Not modeled: a browser also drops a declaration whose value it cannot parse
+/// and falls back to the one before, and this reader cannot tell a value the
+/// browser refuses from one it accepts and [`Rgba::parse`] does not (a named
+/// color). Either way the applied value is listed by [`FloorPass::skipped`] when
+/// it does not parse, so nothing it is unsure of reads as clearing the floor.
 fn declaration(body: &str, property: &str) -> Option<Decl> {
+    let mut last = None;
+    let mut last_important = None;
     let mut offset = 0usize;
     for piece in body.split(';') {
         let start = offset;
@@ -295,11 +309,25 @@ fn declaration(body: &str, property: &str) -> Option<Decl> {
             continue;
         }
         let value_start = start + colon + 1 + leading;
-        return Some(Decl {
+        let decl = Decl {
             value: value_start..value_start + trimmed.len(),
-        });
+        };
+        if is_important(trimmed) {
+            last_important = Some(decl);
+        } else {
+            last = Some(decl);
+        }
     }
-    None
+    last_important.or(last)
+}
+
+/// Whether a declaration's value carries the `!important` flag (`!` and the
+/// ASCII case-insensitive keyword, whitespace allowed between them).
+fn is_important(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower
+        .strip_suffix("important")
+        .is_some_and(|rest| rest.trim_end().ends_with('!'))
 }
 
 #[cfg(test)]
@@ -519,6 +547,65 @@ mod tests {
         let pass = apply_floor(css, ground, foreground, 4.5);
         assert_eq!(pass.lifted.len(), 1);
         assert!((pass.lifted[0].ratio - 1.0).abs() < 1e-6);
+    }
+
+    /// When a block declares `color` twice, CSS uses the LAST declaration (ledger
+    /// #2908), so the last is the one measured and the one lifted, and the
+    /// overridden one is left exactly as written.
+    #[test]
+    fn the_last_color_declaration_is_the_one_measured_and_lifted() {
+        let (ground, foreground) = dark();
+        // The rendered color is #bf616a (3.23:1); the overridden #c0c5ce passes.
+        let css = ".hl-x {\n color: #c0c5ce;\n color: #bf616a;\n}\n";
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert_eq!(pass.lifted.len(), 1, "{pass:?}");
+        assert_eq!(pass.lifted[0].from, Rgba::parse("#bf616a").unwrap());
+        assert_eq!(
+            pass.css, ".hl-x {\n color: #c0c5ce;\n color: #c0c5ce;\n}\n",
+            "the declaration that renders is the one rewritten"
+        );
+
+        // And the converse: an overridden failing color is not what renders, so a
+        // block whose last color passes is left byte-for-byte alone.
+        let css = ".hl-y {\n color: #bf616a;\n color: #a3be8c;\n}\n";
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert!(pass.lifted.is_empty(), "{:?}", pass.lifted);
+        assert_eq!(pass.css, css);
+        assert!(pass.clears_floor());
+    }
+
+    /// The rule's own ground is its LAST `background-color` too.
+    #[test]
+    fn the_last_background_color_is_the_ground_measured_against() {
+        let (ground, foreground) = dark();
+        // On #000000 the foreground is legible; on #6b7280, the ground that
+        // renders, it is ~2.5:1 and the pair cannot be repaired in-palette.
+        let css = ".hl-z {\n background-color: #000000;\n background-color: #6b7280;\n color: #c0c5ce;\n}\n";
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert_eq!(pass.unrepaired.len(), 1, "{pass:?}");
+        assert_eq!(pass.css, css);
+    }
+
+    /// An `!important` declaration wins over a later normal one, as in CSS, so
+    /// the value that renders is the important one: unread, and listed.
+    #[test]
+    fn an_important_declaration_wins_over_a_later_normal_one() {
+        let (ground, foreground) = dark();
+        let css = ".hl-w {\n color: #bf616a !important;\n color: #a3be8c;\n}\n";
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert!(pass.lifted.is_empty(), "{:?}", pass.lifted);
+        assert_eq!(pass.css, css);
+        let skips = pass.skipped();
+        assert_eq!(skips.len(), 1, "{skips:?}");
+        assert_eq!(skips[0].value, "#bf616a !important");
+        assert!(!pass.clears_floor());
+
+        // Of two important declarations, the last wins; `! important` with a space
+        // is the same flag.
+        let css = ".hl-v {\n color: #a3be8c ! IMPORTANT;\n color: #bf616a !important;\n color: #c0c5ce;\n}\n";
+        let skips = apply_floor(css, ground, foreground, 4.5).skipped();
+        assert_eq!(skips.len(), 1, "{skips:?}");
+        assert_eq!(skips[0].value, "#bf616a !important");
     }
 
     /// A tint written as `rgba(…)` is measured like its hex spelling (ledger
