@@ -41,8 +41,8 @@ fn stylesheet(min: f64) -> String {
     .collect::<String>();
     apply_floor(
         &css,
-        Rgba::parse("#2b303b").expect("a valid colour"),
-        Rgba::parse("#c0c5ce").expect("a valid colour"),
+        Rgba::parse("#2b303b").expect("a valid color"),
+        Rgba::parse("#c0c5ce").expect("a valid color"),
         min,
     )
     .css

@@ -2,7 +2,7 @@
 //!
 //! This is the only module that touches a filesystem, and it is `cfg`-gated off
 //! wasm — everything else in the crate stays pure so the browser host can link
-//! the contrast maths and the merge without a filesystem shim.
+//! the contrast math and the merge without a filesystem shim.
 //!
 //! `std::fs` here rather than a kernel `urn:file:` sub-request is deliberate.
 //! The config home is an absolute path outside any host's fs jail, so reading it

@@ -123,8 +123,26 @@ pub const DEFAULT_MIN: f64 = 4.5;
 pub const DEFAULT_MIN_LARGE: f64 = 3.0;
 /// The widest text scale a layout can be asked to survive.
 const SCALE_RANGE: (f64, f64) = (0.5, 4.0);
-/// The full span of possible contrast ratios.
-const RATIO_RANGE: (f64, f64) = (1.0, 21.0);
+/// What `contrast.min` may be: from WCAG AA for body text up to the top of the
+/// scale. An operator may raise the floor (7.0 is AAA) but not lower it below AA
+/// (ledger #1652, point 7).
+const MIN_RANGE: (f64, f64) = (DEFAULT_MIN, 21.0);
+/// What `contrast.min_large` may be: from WCAG AA for large text and user
+/// interface components up to the top of the scale.
+const MIN_LARGE_RANGE: (f64, f64) = (DEFAULT_MIN_LARGE, 21.0);
+
+/// What a floor's lower bound means, for the sentence that refuses a value
+/// below it. `None` for a field whose bound is only the edge of its scale.
+fn floor_meaning(field: &str) -> Option<&'static str> {
+    match field {
+        "contrast.min" => Some("the WCAG AA floor for body text (SC 1.4.3)"),
+        "contrast.min_large" => Some(
+            "the WCAG AA floor for large text and user interface components \
+             (SC 1.4.3, 1.4.11)",
+        ),
+        _ => None,
+    }
+}
 
 /// What went wrong reading or merging a config. Every variant names the field it
 /// blames, because the operator's next move is to edit that line.
@@ -192,7 +210,14 @@ impl fmt::Display for ConfigError {
                 value,
                 min,
                 max,
-            } => write!(f, "{field}: {value} is outside {min}..={max}"),
+            } => match floor_meaning(field) {
+                Some(meaning) if value < min => write!(
+                    f,
+                    "{field}: {value} is below {min}, {meaning}; a floor may be raised \
+                     but not lowered, so set it from {min} to {max}"
+                ),
+                _ => write!(f, "{field}: {value} is outside {min}..={max}"),
+            },
             ConfigError::Unreadable { path, message } => {
                 write!(f, "{}: {message}", path.display())
             }
@@ -205,7 +230,7 @@ impl fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-/// The two syntax themes a front end offers — one per colour scheme, so a page
+/// The two syntax themes a front end offers — one per color scheme, so a page
 /// can serve both and let `prefers-color-scheme` choose without a round trip.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize)]
 pub struct Theme {
@@ -224,9 +249,10 @@ pub struct Theme {
 /// single number is set to 3.0, quietly drops body text below AA.
 #[derive(Clone, PartialEq, Debug, Serialize)]
 pub struct Contrast {
-    /// Floor for body text. 4.5 is WCAG AA; 7.0 is AAA.
+    /// Floor for body text. 4.5 is WCAG AA and the lowest accepted; 7.0 is AAA.
     pub min: f64,
-    /// Floor for large text and UI components. 3.0 is WCAG AA.
+    /// Floor for large text and UI components. 3.0 is WCAG AA and the lowest
+    /// accepted.
     pub min_large: f64,
 }
 
@@ -250,8 +276,8 @@ pub struct Motion {
 pub struct Text {
     /// Multiplier on the base font size. 1.0 is the design size.
     pub scale: f64,
-    /// Whether links carry an underline rather than relying on colour alone
-    /// (WCAG 1.4.1: colour must not be the only visual means of conveying
+    /// Whether links carry an underline rather than relying on color alone
+    /// (WCAG 1.4.1: color must not be the only visual means of conveying
     /// information).
     pub underline_links: bool,
 }
@@ -262,7 +288,7 @@ pub struct Text {
 /// This is what `urn:a11y:config` serves. It is never the contents of one file.
 #[derive(Clone, PartialEq, Debug, Serialize)]
 pub struct A11y {
-    /// Syntax themes per colour scheme.
+    /// Syntax themes per color scheme.
     pub theme: Theme,
     /// Contrast floors.
     pub contrast: Contrast,
@@ -380,8 +406,8 @@ impl Patch {
             check_theme("theme.dark", theme.dark.as_deref())?;
         }
         if let Some(contrast) = &self.contrast {
-            check_range("contrast.min", contrast.min, RATIO_RANGE)?;
-            check_range("contrast.min_large", contrast.min_large, RATIO_RANGE)?;
+            check_range("contrast.min", contrast.min, MIN_RANGE)?;
+            check_range("contrast.min_large", contrast.min_large, MIN_LARGE_RANGE)?;
         }
         if let Some(text) = &self.text {
             check_range("text.scale", text.scale, SCALE_RANGE)?;
@@ -602,15 +628,15 @@ impl A11y {
 /// The residual, stated rather than papered over: a `contrast.min` of 7.0 is a
 /// weak signal that *someone* here wants AAA. It is a deployment posture, it is
 /// machine-wide rather than per-person, and anything that renders the page has to
-/// be able to read it — so it is on the ungated side, and that is a judgement,
+/// be able to read it — so it is on the ungated side, and that is a judgment,
 /// not an oversight.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Presentation {
-    /// Syntax themes per colour scheme.
+    /// Syntax themes per color scheme.
     pub theme: Theme,
     /// Contrast floors.
     pub contrast: Contrast,
-    /// Whether links carry an underline rather than relying on colour alone
+    /// Whether links carry an underline rather than relying on color alone
     /// (WCAG 1.4.1) — a property of the artifact, not of the reader.
     pub underline_links: bool,
 }
@@ -865,6 +891,35 @@ mod tests {
         }
     }
 
+    /// A floor below WCAG AA is refused, and the refusal names the floor it fell
+    /// below (ledger #1652, point 7): `contrast.min` is the body-text floor, so it
+    /// may be raised from 4.5 but not lowered, and `contrast.min_large` likewise
+    /// from 3.0.
+    #[test]
+    fn a_floor_below_wcag_aa_is_refused_and_names_the_floor() {
+        for (text, field, floor) in [
+            ("[contrast]\nmin = 3.0\n", "contrast.min", "4.5"),
+            ("[contrast]\nmin = 4.49\n", "contrast.min", "4.5"),
+            ("[contrast]\nmin_large = 2.5\n", "contrast.min_large", "3"),
+        ] {
+            let err = Patch::parse(text, None).unwrap_err();
+            match &err {
+                ConfigError::OutOfRange { field: f, .. } => assert_eq!(*f, field),
+                other => panic!("{text:?} → {other:?}"),
+            }
+            let message = err.to_string();
+            assert!(message.contains(floor), "{message}");
+            assert!(message.contains("WCAG AA"), "{message}");
+        }
+        // The floors themselves, and anything above them, are accepted.
+        for text in [
+            "[contrast]\nmin = 4.5\nmin_large = 3.0\n",
+            "[contrast]\nmin = 7.0\nmin_large = 4.5\n",
+        ] {
+            Patch::parse(text, None).unwrap();
+        }
+    }
+
     /// `reduce` absent means UNSTATED — the front end defers to the OS — and is
     /// distinguishable from an explicit `false`.
     #[test]
@@ -917,7 +972,7 @@ mod tests {
     fn the_turtle_face_is_skolemized_and_types_its_literals() {
         let mut effective =
             A11y::merged([
-                &Patch::parse("[contrast]\nmin = 3.0\n[motion]\nreduce = true\n", None).unwrap(),
+                &Patch::parse("[contrast]\nmin = 5.0\n[motion]\nreduce = true\n", None).unwrap(),
             ]);
         effective.layers = vec![PathBuf::from("/cfg/ikigai/a11y.toml")];
         let ttl = effective.to_turtle("urn:a11y:config:cms-web", Some("cms-web"));
@@ -925,7 +980,7 @@ mod tests {
         assert!(ttl.contains("<urn:a11y:config:cms-web> a ik:AccessibilityConfig"));
         assert!(ttl.contains("ik:app \"cms-web\""));
         assert!(
-            ttl.contains("ik:contrastMin 3.0"),
+            ttl.contains("ik:contrastMin 5.0"),
             "a decimal keeps its point: {ttl}"
         );
         assert!(ttl.contains("ik:reduceMotion true"));

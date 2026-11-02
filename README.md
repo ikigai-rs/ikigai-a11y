@@ -23,14 +23,14 @@ source urn:a11y:contrast from=#323232 on=#2b303b
 | `urn:a11y:config:{app}` | …with `{app}`'s override layer applied | `urn:cap:a11y:read` |
 | `urn:a11y:presentation` | the **rendering half**: themes, contrast floors, link underlining | none |
 | `urn:a11y:presentation:{app}` | …with `{app}`'s override layer applied | none |
-| `urn:a11y:contrast` | the WCAG ratio of two colours, and whether it clears a floor | none |
+| `urn:a11y:contrast` | the WCAG ratio of two colors, and whether it clears a floor | none |
 
 Faces: `text/plain` (TOML), `as=application/json`, `as=text/turtle` (skolemized,
 no blank nodes; the gated view links the files that contributed as
 `prov:wasDerivedFrom` plus `ik:sharedLayer`/`ik:appLayer`).
 
 `urn:a11y:contrast` requires no capability because it is arithmetic over two
-colours the caller already holds; declaring one would make the manifold
+colors the caller already holds; declaring one would make the manifold
 under-offer. `urn:a11y:config` requires one because it states whether the person
 at the keyboard needs reduced motion and larger text — assistive-technology
 information about a human being, not decoration.
@@ -85,7 +85,7 @@ moment a reader unioned the graphs.
 
 ### Where the line is drawn
 
-| | | |
+| item | what it states | access |
 | --- | --- | --- |
 | `theme.light` / `theme.dark` | how the artifact is drawn | ungated |
 | `contrast.min` / `contrast.min_large` | the deployment's floor | ungated |
@@ -101,7 +101,7 @@ for the default to point.
 The residual, stated rather than papered over: a `contrast.min` of 7.0 is a weak
 signal that *someone* here wants AAA. It is machine-wide rather than per-person,
 it is the operator's posture about the artifact, and anything that renders the
-page has to be able to read it. That is a judgement, not an oversight.
+page has to be able to read it. That is a judgment, not an oversight.
 
 ## The layering
 
@@ -174,15 +174,15 @@ light = "InspiredGithub"      # any of the 32 embedded themes, either spelling
 dark  = "Base16OceanDark"     # ("Base16OceanDark" or "base16-ocean.dark")
 
 [contrast]
-min       = 4.5               # WCAG AA body text (7.0 = AAA)
-min_large = 3.0               # WCAG AA large text and UI components
+min       = 4.5               # WCAG AA body text (7.0 = AAA); 4.5 – 21
+min_large = 3.0               # WCAG AA large text and UI components; 3.0 – 21
 
 [motion]
 reduce = true                 # OMIT to defer to the OS — see below
 
 [text]
 scale           = 1.0         # 0.5 – 4.0
-underline_links = true        # colour alone must not carry meaning (WCAG 1.4.1)
+underline_links = true        # color alone must not carry meaning (WCAG 1.4.1)
 ```
 
 Three things are deliberately not what a first sketch reaches for:
@@ -198,22 +198,24 @@ Three things are deliberately not what a first sketch reaches for:
   nothing is the same defect as a misspelled theme that silently renders the
   default: the operator asked for something and got something else without being
   told. Unknown theme names and out-of-range numbers are errors for the same
-  reason.
+  reason, and so is a floor below WCAG AA: an operator may raise `min` from 4.5
+  or `min_large` from 3.0, never lower them.
 
 ## The contrast-floor pass
 
-A syntax theme is a palette plus a ground, and some of its scope colours do not
+A syntax theme is a palette plus a ground, and some of its scope colors do not
 clear the floor against that ground. Which ones is a property of the *theme*, so
 it can be computed once rather than patched per scope as each is noticed.
 
 ```rust
 let pass = ikigai_a11y::themes::theme_css(EmbeddedThemeName::Base16OceanDark, "hl-", 4.5);
-pass.css          // the stylesheet, sub-floor colours lifted
+pass.css          // the stylesheet, sub-floor colors lifted
 pass.lifted       // what changed, and from what ratio
 pass.unrepaired   // what could NOT be fixed in-palette — reported, not hidden
+pass.skipped()    // values it could not READ (named colors, var(), !important…)
 ```
 
-The repair colour is **the theme's own default foreground** — the one colour a
+The repair color is **the theme's own default foreground** — the one color a
 theme guarantees is legible on its own ground. Nothing is invented, no new hue
 enters the palette, and a rule the pass cannot fix in-palette is left exactly as
 the theme wrote it and reported. The pass is idempotent.
@@ -244,15 +246,21 @@ on. Those are a fact about the theme, not evidence that the config failed to
 arrive, and counting them would make the assertion fail for a reason the consumer
 cannot fix.
 
+**The proof covers only what the pass can read.** A value it cannot read (a named
+color, `hsl()`, `var()`, a value with `!important`) is never lifted, so an empty
+`lifted` says nothing about it. `skipped()` lists every such value; assert it is
+empty too when the generator should emit only colors the pass reads, which is
+what `syntect`'s CSS does.
+
 `ikigai-browse`'s `a_raised_contrast_floor_reaches_the_stylesheet` is the worked
 example: it writes `min = 7.0` into a tempdir `a11y.toml`, resolves the stylesheet
 through the kernel, and re-runs the pass over each scheme block. Two disciplines in
 it are what make such a test durable rather than a maintenance tax:
 
 - **Read the ground and foreground back out of the generated output** rather than
-  restating them in the test. A test that hard-codes the colours it expects stops
+  restating them in the test. A test that hard-codes the colors it expects stops
   testing the config the moment the theme is retuned, and does so silently.
-- **Assert the mechanism, not a colour count.** Then add the anti-vacuity control:
+- **Assert the mechanism, not a color count.** Then add the anti-vacuity control:
   check that the sheet generated at the *default* floor does **not** clear the
   raised one. Without it the test passes forever the day a theme starts clearing
   7:1 on its own, and stops proving that anything reached anything. `ikigai-browse`
@@ -314,7 +322,7 @@ neither is configuration-free and neither may claim `urn:iki:space:a11y`.
 
 ## Layout
 
-| module | | |
+| module | what it holds | where it builds |
 | --- | --- | --- |
 | `color` | WCAG luminance and ratio, alpha-composited | pure, wasm |
 | `config` | schema, key-wise merge, both views, the three faces | pure, wasm |
@@ -332,6 +340,6 @@ use for.
 what it does not check, how it is tested, the gaps we know about (among them, the themes the
 floor pass cannot fully repair), and how to report a barrier.
 
-## Licence
+## License
 
 MIT OR Apache-2.0.

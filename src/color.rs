@@ -1,4 +1,4 @@
-//! WCAG colour maths — relative luminance and contrast ratio.
+//! WCAG color math — relative luminance and contrast ratio.
 //!
 //! Pure, allocation-light, and free of every ikigai type, so it compiles to
 //! `wasm32-unknown-unknown` and can be unit-tested against the published WCAG
@@ -11,17 +11,17 @@
 //!   `((c + 0.055)/1.055)^2.4` above it,
 //! - relative luminance is `0.2126·R + 0.7152·G + 0.0722·B` of the decoded
 //!   channels,
-//! - the ratio of two colours is `(L_lighter + 0.05) / (L_darker + 0.05)`.
+//! - the ratio of two colors is `(L_lighter + 0.05) / (L_darker + 0.05)`.
 //!
 //! Alpha is composited, not ignored. syntect emits `#rrggbbaa` whenever a theme
-//! gives a scope a translucent colour, and a translucent foreground's *apparent*
-//! contrast is the contrast of what the eye actually sees — the colour composited
+//! gives a scope a translucent color, and a translucent foreground's *apparent*
+//! contrast is the contrast of what the eye actually sees — the color composited
 //! over its ground. Treating `#ffffff00` as white would report 21:1 for an
 //! invisible glyph.
 
 use std::fmt;
 
-/// An 8-bit-per-channel sRGB colour with alpha.
+/// An 8-bit-per-channel sRGB color with alpha.
 ///
 /// `alpha` is 255 for the opaque `#rrggbb` form. It is not part of luminance:
 /// composite with [`over`](Rgba::over) first, which is what the eye does.
@@ -37,8 +37,8 @@ pub struct Rgba {
     pub alpha: u8,
 }
 
-/// Why a colour string could not be read — carried rather than swallowed, because
-/// a mistyped colour in an operator's config must be loud.
+/// Why a color string could not be read — carried rather than swallowed, because
+/// a mistyped color in an operator's config must be loud.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ParseColorError {
     /// The offending text, as written.
@@ -59,7 +59,7 @@ impl fmt::Display for ParseColorError {
 impl std::error::Error for ParseColorError {}
 
 impl Rgba {
-    /// An opaque colour from its three channels.
+    /// An opaque color from its three channels.
     pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Rgba {
             r,
@@ -71,8 +71,8 @@ impl Rgba {
 
     /// Parse a CSS color in one of two notations:
     ///
-    /// - **hex**: `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`. The leading `#` is
-    ///   optional and case does not matter.
+    /// - **hex**: `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`. The one leading `#`
+    ///   is optional (a second is an error) and case does not matter.
     /// - **`rgb()`/`rgba()`**, as CSS Color 4 §5.1 defines them (the two names
     ///   are aliases): the legacy comma form, whose three channels are all
     ///   numbers or all percentages, with an optional fourth alpha; and the
@@ -102,7 +102,8 @@ impl Rgba {
         if let Some(args) = rgb_arguments(trimmed) {
             return rgb_function(args).ok_or_else(fail);
         }
-        let hex = trimmed.trim_start_matches('#');
+        // Exactly one optional `#`: `##fff` is a typo, not white (ledger #2907).
+        let hex = trimmed.strip_prefix('#').unwrap_or(trimmed);
         if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(fail());
         }
@@ -140,13 +141,13 @@ impl Rgba {
         }
     }
 
-    /// Whether this colour is fully opaque.
+    /// Whether this color is fully opaque.
     pub fn is_opaque(self) -> bool {
         self.alpha == 0xff
     }
 
-    /// This colour composited over `ground` (source-over alpha blending),
-    /// yielding the opaque colour an eye actually sees.
+    /// This color composited over `ground` (source-over alpha blending),
+    /// yielding the opaque color an eye actually sees.
     pub fn over(self, ground: Rgba) -> Rgba {
         if self.is_opaque() {
             return self;
@@ -175,7 +176,7 @@ impl Rgba {
         }
     }
 
-    /// WCAG relative luminance of this colour, **ignoring alpha** — composite
+    /// WCAG relative luminance of this color, **ignoring alpha** — composite
     /// with [`over`](Self::over) first if it may be translucent.
     pub fn luminance(self) -> f64 {
         fn decode(channel: u8) -> f64 {
@@ -340,8 +341,8 @@ impl fmt::Display for Rgba {
     }
 }
 
-/// The WCAG contrast ratio between two colours: `1.0` (identical) to `21.0`
-/// (black on white). Symmetric — the lighter colour is found, not assumed.
+/// The WCAG contrast ratio between two colors: `1.0` (identical) to `21.0`
+/// (black on white). Symmetric — the lighter color is found, not assumed.
 ///
 /// A translucent `foreground` is composited over `background` first; a
 /// translucent *background* is taken at face value, because what lies behind it
@@ -359,7 +360,7 @@ mod tests {
 
     /// The two anchors of the scale, exactly as WCAG defines them.
     #[test]
-    fn black_on_white_is_twenty_one_to_one_and_a_colour_on_itself_is_one() {
+    fn black_on_white_is_twenty_one_to_one_and_a_color_on_itself_is_one() {
         let black = Rgba::rgb(0, 0, 0);
         let white = Rgba::rgb(0xff, 0xff, 0xff);
         assert!((ratio(black, white) - 21.0).abs() < 1e-9);
@@ -379,7 +380,7 @@ mod tests {
         assert!((r - 1.03).abs() < 0.005, "{r}");
     }
 
-    /// The parameter colour base16-ocean.dark actually means (its own
+    /// The parameter color base16-ocean.dark actually means (its own
     /// foreground) clears AA on its own ground; the red it falls through to
     /// does not. Both numbers are quoted in ikigai-browse's DARK_PARAMETER.
     #[test]
@@ -417,6 +418,16 @@ mod tests {
         ] {
             assert!(Rgba::parse(bad).is_err(), "{bad:?} must not parse");
         }
+    }
+
+    /// One leading `#` is optional; a second is a typo, not a color (ledger
+    /// #2907). `##fff` used to read as white.
+    #[test]
+    fn a_doubled_hash_is_an_error() {
+        for bad in ["##fff", "##ffffff", "###abc", "#"] {
+            assert!(Rgba::parse(bad).is_err(), "{bad:?} must not parse");
+        }
+        assert_eq!(Rgba::parse("#fff"), Rgba::parse("fff"));
     }
 
     /// CSS Color 4 §5.1 `rgb()`/`rgba()`, as `(input, r, g, b, alpha)`. The two
@@ -513,13 +524,13 @@ mod tests {
     }
 
     /// Alpha is composited, not ignored: fully transparent text has the contrast
-    /// of its ground (1:1 — invisible), not of the colour it nominally names.
+    /// of its ground (1:1 — invisible), not of the color it nominally names.
     #[test]
     fn a_translucent_foreground_is_composited_before_measuring() {
         let ground = Rgba::parse("#000000").unwrap();
         let invisible = Rgba::parse("#ffffff00").unwrap();
         assert!((ratio(invisible, ground) - 1.0).abs() < 1e-9);
-        // Half-opacity white over black composites to mid grey, so the ratio
+        // Half-opacity white over black composites to mid gray, so the ratio
         // sits between the two extremes rather than at 21:1.
         let half = Rgba::parse("#ffffff80").unwrap();
         let r = ratio(half, ground);

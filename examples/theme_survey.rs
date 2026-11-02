@@ -3,7 +3,7 @@
 //!     cargo run --features themes --example theme_survey [floor]
 //!
 //! For every embedded theme, this generates the stylesheet `ikigai-browse` would
-//! serve, measures every scope colour against the theme's own ground, and reports
+//! serve, measures every scope color against the theme's own ground, and reports
 //! how many rules fall below the floor — plus whether the theme's own default
 //! foreground clears it, which is what decides whether the repair is possible
 //! in-palette at all.
