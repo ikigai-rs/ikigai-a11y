@@ -1,13 +1,13 @@
 //! The contrast-floor pass: repair a generated stylesheet **in its own palette**.
 //!
-//! A syntax theme is a palette plus a ground. Some of its scope colours clear the
+//! A syntax theme is a palette plus a ground. Some of its scope colors clear the
 //! contrast floor against that ground and some do not — and which is which is a
 //! property of the theme, not of the code being highlighted, so it can be
 //! computed once and repaired once for every theme, rather than patched by hand
 //! per scope as it is noticed.
 //!
-//! The repair colour is **the theme's own default foreground**. That is the one
-//! colour a theme guarantees is legible on its own ground, so lifting to it
+//! The repair color is **the theme's own default foreground**. That is the one
+//! color a theme guarantees is legible on its own ground, so lifting to it
 //! invents nothing: a scope that was going to be hard to read renders as ordinary
 //! text in the theme's own hand, which is what an unstyled scope already does.
 //! No new hue enters the palette and no other rule changes.
@@ -29,11 +29,11 @@ use crate::color::{ratio, Rgba};
 pub struct Lift {
     /// The rule's selector, as written.
     pub selector: String,
-    /// The colour it declared.
+    /// The color it declared.
     pub from: Rgba,
-    /// The colour it now declares — always the theme's own foreground.
+    /// The color it now declares — always the theme's own foreground.
     pub to: Rgba,
-    /// The ratio the original colour achieved against its ground.
+    /// The ratio the original color achieved against its ground.
     pub ratio: f64,
 }
 
@@ -45,16 +45,27 @@ pub struct Lift {
 pub struct Finding {
     /// The rule's selector, as written.
     pub selector: String,
-    /// The colour it declares.
+    /// The color it declares.
     pub color: Rgba,
     /// The ratio it achieves against its ground.
     pub ratio: f64,
 }
 
+/// A value the pass needed and could not read, left exactly as written.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Skip {
+    /// The rule's selector, as written.
+    pub selector: String,
+    /// `color`, or `background-color` when the rule's own ground is unreadable.
+    pub property: &'static str,
+    /// The declared value, as written.
+    pub value: String,
+}
+
 /// The result of a floor pass: the rewritten stylesheet and what it changed.
 #[derive(Clone, PartialEq, Debug)]
 pub struct FloorPass {
-    /// The stylesheet with sub-floor foreground colours lifted.
+    /// The stylesheet with sub-floor foreground colors lifted.
     pub css: String,
     /// Every rule that was lifted, in source order.
     pub lifted: Vec<Lift>,
@@ -62,26 +73,41 @@ pub struct FloorPass {
     /// exactly as the theme wrote it, and reported rather than hidden. A caller
     /// that wants a guarantee rather than a best effort checks this is empty.
     pub unrepaired: Vec<Finding>,
-    /// The repair colour's OWN ratio against the page ground.
+    /// The repair color's OWN ratio against the page ground.
     ///
     /// Normally high — a theme's foreground is legible on its own ground by
     /// construction — but a theme where it is below the floor cannot be repaired
     /// from its own palette at all, and the honest answer for such a theme is to
-    /// not offer it at that floor rather than to invent a colour for it.
+    /// not offer it at that floor rather than to invent a color for it.
     pub foreground_ratio: f64,
 }
 
 impl FloorPass {
-    /// Whether the repair colour itself clears `min` — i.e. whether the pass
+    /// Whether the repair color itself clears `min` — i.e. whether the pass
     /// could do its job at all on this ground.
     pub fn repairable(&self, min: f64) -> bool {
         self.foreground_ratio >= min
     }
 
-    /// Whether every rule now clears the floor: the pass repaired what it found
-    /// and left nothing behind.
+    /// Whether every rule now clears the floor: the pass repaired what it found,
+    /// left nothing behind, and read every value it needed. A value it could not
+    /// read (see [`skipped`](Self::skipped)) is not proved to clear anything.
     pub fn clears_floor(&self) -> bool {
-        self.unrepaired.is_empty()
+        self.unrepaired.is_empty() && self.skipped().is_empty()
+    }
+
+    /// Every value the pass needed and could not read, rule by rule in source
+    /// order (within a rule, `color` before `background-color`): the
+    /// `color` of a rule written as a named color, `hsl()`, `var()`, a value
+    /// carrying `!important`, or anything else [`Rgba::parse`] refuses, and the
+    /// `background-color` of a rule that declares a `color` when that ground is
+    /// unreadable (the rule is then judged against the page ground instead).
+    ///
+    /// The pass leaves each of these exactly as written, so they are found in
+    /// [`css`](Self::css). None of them was measured, which is why a re-run of the
+    /// pass that lifts nothing proves nothing about them.
+    pub fn skipped(&self) -> Vec<Skip> {
+        unread(&self.css)
     }
 }
 
@@ -91,8 +117,11 @@ impl FloorPass {
 ///
 /// A rule that declares its own `background-color` is measured against **that**,
 /// not against the page ground: a rule which repaints its own ground has changed
-/// what its text sits on. Translucent colours are composited before measuring
+/// what its text sits on. Translucent colors are composited before measuring
 /// (see [`crate::color`]).
+///
+/// A value the pass cannot read (a named color, `hsl()`, `var()`, `!important`)
+/// is left as written and listed by [`FloorPass::skipped`], never dropped.
 pub fn apply_floor(css: &str, ground: Rgba, foreground: Rgba, min: f64) -> FloorPass {
     let replacement = foreground.to_css();
     let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
@@ -110,9 +139,9 @@ pub fn apply_floor(css: &str, ground: Rgba, foreground: Rgba, min: f64) -> Floor
             continue;
         };
         let Ok(current) = Rgba::parse(&body[color.value.clone()]) else {
-            // An unparseable colour is left alone: this pass repairs contrast, it
+            // An unparseable color is left alone: this pass repairs contrast, it
             // does not police syntax, and a value it cannot read is one it cannot
-            // reason about either.
+            // reason about either. It is not dropped silently: `skipped` lists it.
             continue;
         };
         let achieved = ratio(current, local_ground);
@@ -151,6 +180,34 @@ pub fn apply_floor(css: &str, ground: Rgba, foreground: Rgba, min: f64) -> Floor
         unrepaired,
         foreground_ratio: ratio(foreground, ground),
     }
+}
+
+/// The values [`apply_floor`] needs and cannot read, by the same reading it does:
+/// each rule's `color`, and the `background-color` of a rule that has a `color`.
+fn unread(css: &str) -> Vec<Skip> {
+    let mut skipped = Vec::new();
+    for block in declaration_blocks(css) {
+        let body = &css[block.body.clone()];
+        let Some(color) = declaration(body, "color") else {
+            continue;
+        };
+        let selector = css[block.selector.clone()].trim();
+        for (property, decl) in [
+            ("color", Some(color)),
+            ("background-color", declaration(body, "background-color")),
+        ] {
+            let Some(decl) = decl else { continue };
+            let value = &body[decl.value];
+            if Rgba::parse(value).is_err() {
+                skipped.push(Skip {
+                    selector: selector.to_string(),
+                    property,
+                    value: value.to_string(),
+                });
+            }
+        }
+    }
+    skipped
 }
 
 /// A declaration block: the selector text before it and the text between braces.
@@ -294,7 +351,7 @@ mod tests {
     }
 
     /// `color` must not match the tail of `background-color`. Getting this wrong
-    /// repaints backgrounds with the foreground colour — a spectacular failure
+    /// repaints backgrounds with the foreground color — a spectacular failure
     /// that a naive `contains("color:")` walks straight into.
     #[test]
     fn background_color_is_not_mistaken_for_color() {
@@ -361,12 +418,61 @@ mod tests {
     /// An unreadable value is left alone rather than rewritten: this pass fixes
     /// contrast, it does not normalize CSS.
     #[test]
-    fn an_unparseable_colour_is_left_alone() {
+    fn an_unparseable_color_is_left_alone() {
         let (ground, foreground) = dark();
         let css = ".hl-x {\n color: var(--fg);\n}\n";
         let pass = apply_floor(css, ground, foreground, 4.5);
         assert_eq!(pass.css, css);
         assert!(pass.lifted.is_empty());
+        assert_eq!(pass.skipped().len(), 1, "left alone, but listed");
+    }
+
+    /// Every value the pass cannot read is LISTED, never silently dropped (ledger
+    /// #1652, point 3): a named color, `hsl()`, `var()` and a value carrying
+    /// `!important` are left as written, and so is a rule whose own ground cannot
+    /// be read. Each is outside what the pass measured, so the sheet is not proved
+    /// to clear the floor.
+    #[test]
+    fn every_value_the_pass_cannot_read_is_listed() {
+        let (ground, foreground) = dark();
+        let css = ".a {\n color: red;\n}\n\
+                   .b {\n color: hsl(0 0% 50%);\n}\n\
+                   .c {\n color: var(--fg);\n}\n\
+                   .d {\n color: #bf616a !important;\n}\n\
+                   .e {\n background-color: var(--bg);\n color: #c0c5ce;\n}\n\
+                   .f {\n color: #a3be8c;\n}\n";
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert_eq!(pass.css, css, "nothing it cannot read is rewritten");
+        let skips = pass.skipped();
+        let skipped: Vec<(&str, &str, &str)> = skips
+            .iter()
+            .map(|s| (s.selector.as_str(), s.property, s.value.as_str()))
+            .collect();
+        assert_eq!(
+            skipped,
+            [
+                (".a", "color", "red"),
+                (".b", "color", "hsl(0 0% 50%)"),
+                (".c", "color", "var(--fg)"),
+                (".d", "color", "#bf616a !important"),
+                (".e", "background-color", "var(--bg)"),
+            ]
+        );
+        assert!(pass.unrepaired.is_empty());
+        assert!(
+            !pass.clears_floor(),
+            "a value the pass could not read is not proved to clear the floor"
+        );
+    }
+
+    /// A sheet the pass reads in full lists nothing.
+    #[test]
+    fn a_sheet_read_in_full_lists_nothing_skipped() {
+        let (ground, foreground) = dark();
+        let css = ".x {\n background-color: #000000;\n color: #ffffff;\n}\n";
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert!(pass.skipped().is_empty());
+        assert!(pass.clears_floor());
     }
 
     /// A theme whose own foreground fails the floor cannot be repaired from its
@@ -389,7 +495,7 @@ mod tests {
 
     /// A rule that repaints a low-contrast ground of its own cannot be repaired
     /// by the theme's foreground either — the failure is the pair, not the text
-    /// colour. Reported, not rewritten, which is also what makes the pass
+    /// color. Reported, not rewritten, which is also what makes the pass
     /// idempotent: run it twice and the second run changes nothing.
     #[test]
     fn a_rule_whose_own_ground_defeats_the_foreground_is_reported_not_rewritten() {
@@ -404,10 +510,10 @@ mod tests {
         assert_eq!(second.css, first.css, "idempotent");
     }
 
-    /// A translucent scope colour is composited before it is judged: fully
+    /// A translucent scope color is composited before it is judged: fully
     /// transparent text is 1:1, not whatever hue it nominally names.
     #[test]
-    fn a_translucent_colour_is_composited_before_being_judged() {
+    fn a_translucent_color_is_composited_before_being_judged() {
         let (ground, foreground) = dark();
         let css = ".hl-ghost {\n color: #ffffff00;\n}\n";
         let pass = apply_floor(css, ground, foreground, 4.5);

@@ -16,7 +16,7 @@
 //! only needs to draw something never has to be handed the rest.
 //!
 //! `urn:a11y:contrast` requires **nothing**, because it computes a WCAG ratio
-//! from two colours the caller already holds. Declaring a capability it does not
+//! from two colors the caller already holds. Declaring a capability it does not
 //! need would make the manifold under-offer — an agent holding no a11y grant
 //! would be told it cannot do arithmetic.
 //!
@@ -240,7 +240,7 @@ impl A11yHandle {
     }
 }
 
-/// The requested face, defaulting to `text/plain`. An unrecognised `as` is an
+/// The requested face, defaulting to `text/plain`. An unrecognized `as` is an
 /// error rather than a silent fallback: a caller that asked for JSON and got
 /// prose would notice much later than the caller who asked wrong.
 fn face(inv: &Invocation<'_>) -> Result<&'static str> {
@@ -426,31 +426,42 @@ pub fn presentation_with(handle: Arc<A11yHandle>) -> FnEndpoint {
 }
 
 fn contrast_impl(inv: &Invocation<'_>) -> Result<Representation> {
-    let colour = |name: &str| -> Result<Rgba> {
+    let read_color = |name: &str| -> Result<Rgba> {
         let raw = inv.inline_str(name)?;
         Rgba::parse(raw).map_err(|e| Error::InvalidArgument {
             name: name.to_string(),
             detail: e.to_string(),
         })
     };
-    let from = colour("from")?;
-    let on = colour("on")?;
+    let from = read_color("from")?;
+    let on = read_color("on")?;
     let min = match inv.inline_str("min").map(str::trim) {
         Err(_) | Ok("") => crate::config::DEFAULT_MIN,
-        Ok(raw) => raw.parse::<f64>().map_err(|_| Error::InvalidArgument {
-            name: "min".to_string(),
-            detail: format!("expected a contrast ratio, got {raw:?}"),
-        })?,
+        Ok(raw) => match raw.parse::<f64>() {
+            // NaN fails both comparisons and is refused with the rest.
+            Ok(min) if (1.0..=21.0).contains(&min) => min,
+            _ => {
+                return Err(Error::InvalidArgument {
+                    name: "min".to_string(),
+                    detail: format!(
+                        "expected a contrast ratio from 1 to 21, got {raw:?}: 4.5 is the WCAG \
+                         AA floor for body text, 3 for large text and user interface \
+                         components, 7 for AAA"
+                    ),
+                })
+            }
+        },
     };
     let achieved = ratio(from, on);
     let passes = achieved >= min;
+    let shown = shown_ratio(achieved, min);
     let (repr_type, body) = match face(inv)? {
         JSON => (
             ReprType::new(JSON),
             serde_json::json!({
                 "from": from.to_css(),
                 "on": on.to_css(),
-                "ratio": (achieved * 100.0).round() / 100.0,
+                "ratio": shown.parse::<f64>().expect("formatted from a finite f64"),
                 "min": min,
                 "passes": passes,
             })
@@ -466,7 +477,7 @@ fn contrast_impl(inv: &Invocation<'_>) -> Result<Representation> {
         // second so a human reading the REPL does not have to do the comparison.
         _ => (
             plain(),
-            format!("{:.2} {}", achieved, if passes { "pass" } else { "fail" }),
+            format!("{shown} {}", if passes { "pass" } else { "fail" }),
         ),
     };
     // A pure function of its arguments: permanently cacheable, no threads, and
@@ -474,14 +485,38 @@ fn contrast_impl(inv: &Invocation<'_>) -> Result<Representation> {
     Ok(Representation::new(repr_type, body.into_bytes()).cacheable())
 }
 
-/// `urn:a11y:contrast` — the WCAG ratio between two colours and whether it
+/// `achieved` as text that stays on the side of `min` the verdict is on: two
+/// decimals, or as many more as it takes (ledger #1652, point 8). Rounded to
+/// two, a failing 4.4998 reads "4.50", which is the floor it failed.
+///
+/// Past six decimals the ratio is truncated toward the verdict instead (down for
+/// a failure, up for a pass), so the shown number never crosses the floor.
+fn shown_ratio(achieved: f64, min: f64) -> String {
+    let passes = achieved >= min;
+    for places in 2..=6 {
+        let text = format!("{achieved:.places$}");
+        let shown: f64 = text.parse().expect("formatted from a finite f64");
+        if (shown >= min) == passes {
+            return text;
+        }
+    }
+    let scaled = achieved * 1e6;
+    let toward = if passes {
+        scaled.ceil()
+    } else {
+        scaled.floor()
+    };
+    format!("{:.6}", toward / 1e6)
+}
+
+/// `urn:a11y:contrast` — the WCAG ratio between two colors and whether it
 /// clears a floor.
 pub fn contrast() -> FnEndpoint {
     FnEndpoint::new("a11y-contrast", contrast_impl).with_description(
         Description::new("a11y-contrast")
             .title("WCAG contrast ratio")
             .summary(
-                "The WCAG 2.x contrast ratio between two colours (1.0–21.0) and whether it \
+                "The WCAG 2.x contrast ratio between two colors (1.0–21.0) and whether it \
                  clears a floor: `<ratio> <pass|fail>`, or as=application/json for the fields. \
                  A translucent `from` is composited over `on` first, because apparent contrast \
                  is what a reader gets. `min` defaults to 4.5 (AA body text); pass the \
@@ -499,12 +534,15 @@ pub fn contrast() -> FnEndpoint {
             )
             .input(
                 ArgSpec::new("on")
-                    .summary("the background colour it sits on")
+                    .summary("the background color it sits on")
                     .class(XSD_STRING),
             )
             .input(
                 ArgSpec::new("min")
-                    .summary("the floor to judge against (4.5 = AA body text, 3.0 = AA large, 7.0 = AAA)")
+                    .summary(
+                        "the floor to judge against, from 1 to 21 (4.5 = AA body text, 3.0 = AA \
+                         large, 7.0 = AAA)",
+                    )
                     .class(XSD_DECIMAL)
                     .default_value("4.5"),
             )
@@ -644,7 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn contrast_honours_an_explicit_floor_and_the_json_face() {
+    fn contrast_honors_an_explicit_floor_and_the_json_face() {
         let cap = Capability::root();
         let request = contrast_request("#767676", "#ffffff")
             .with_arg("min", ArgRef::Inline(b"3.0".to_vec()))
@@ -659,11 +697,11 @@ mod tests {
     }
 
     #[test]
-    fn a_malformed_colour_or_floor_is_an_invalid_argument() {
+    fn a_malformed_color_or_floor_is_an_invalid_argument() {
         let cap = Capability::root();
         for request in [
             contrast_request("chartreuse", "#ffffff"),
-            contrast_request("#000000", "not-a-colour"),
+            contrast_request("#000000", "not-a-color"),
             contrast_request("#000000", "#ffffff")
                 .with_arg("min", ArgRef::Inline(b"very".to_vec())),
         ] {
@@ -675,12 +713,72 @@ mod tests {
                 "a bad argument must not be guessed at"
             );
         }
-        // A missing required colour is missing, not defaulted.
+        // A missing required color is missing, not defaulted.
         let bare = Request::new(Verb::Source, iri(CONTRAST_IRI));
         assert!(matches!(
             invoke(&contrast(), bare, &cap),
             Err(Error::MissingArgument(_))
         ));
+    }
+
+    /// A floor no ratio can mean is refused, and the refusal names the WCAG
+    /// floors (ledger #1652, point 7). Below 4.5 stays legal here: 3.0 is the
+    /// large-text and non-text floor, a question a caller may fairly ask.
+    #[test]
+    fn a_floor_outside_the_ratio_scale_is_an_invalid_argument() {
+        let cap = Capability::root();
+        for min in ["0", "0.5", "-4.5", "21.5", "NaN", "inf"] {
+            let request = contrast_request("#000000", "#ffffff")
+                .with_arg("min", ArgRef::Inline(min.as_bytes().to_vec()));
+            match invoke(&contrast(), request, &cap) {
+                Err(Error::InvalidArgument { name, detail }) => {
+                    assert_eq!(name, "min");
+                    assert!(detail.contains("4.5"), "{detail}");
+                }
+                other => panic!("min={min} → {other:?}"),
+            }
+        }
+        for min in ["1", "3.0", "21"] {
+            let request = contrast_request("#000000", "#ffffff")
+                .with_arg("min", ArgRef::Inline(min.as_bytes().to_vec()));
+            invoke(&contrast(), request, &cap).unwrap();
+        }
+    }
+
+    /// A failing ratio never reads as the floor it failed (ledger #1652, point
+    /// 8): #d010d0 on white is 4.4998:1, which two decimals round to "4.50".
+    /// The text face shows the digits it takes to keep the number on the side of
+    /// the verdict, and the JSON face reports the same number.
+    /// The shown ratio stays on the verdict's side of the floor at every
+    /// distance from it, including past six decimals, where it is truncated
+    /// toward the verdict.
+    #[test]
+    fn the_shown_ratio_never_crosses_the_floor() {
+        assert_eq!(shown_ratio(4.54, 4.5), "4.54");
+        assert_eq!(shown_ratio(4.4998, 4.5), "4.4998");
+        assert_eq!(shown_ratio(4.504, 4.504), "4.504");
+        assert_eq!(shown_ratio(4.499_999_9, 4.5), "4.499999");
+        // "4.50" is already below a floor of 4.50000002, so two decimals do.
+        assert_eq!(shown_ratio(4.500_000_01, 4.500_000_02), "4.50");
+        assert_eq!(shown_ratio(4.500_000_03, 4.500_000_02), "4.500001");
+    }
+
+    #[test]
+    fn a_ratio_just_under_the_floor_never_reads_as_the_floor() {
+        let cap = Capability::root();
+        let rep = invoke(&contrast(), contrast_request("#d010d0", "#ffffff"), &cap).unwrap();
+        assert_eq!(String::from_utf8_lossy(&rep.bytes), "4.4998 fail");
+
+        let request = contrast_request("#d010d0", "#ffffff")
+            .with_arg("as", ArgRef::Inline(JSON.as_bytes().to_vec()));
+        let rep = invoke(&contrast(), request, &cap).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&rep.bytes).unwrap();
+        assert_eq!(json["passes"], false);
+        assert!(json["ratio"].as_f64().unwrap() < 4.5, "{json}");
+
+        // The ordinary case keeps two decimals.
+        let rep = invoke(&contrast(), contrast_request("#767676", "#ffffff"), &cap).unwrap();
+        assert_eq!(String::from_utf8_lossy(&rep.bytes), "4.54 pass");
     }
 
     #[test]
@@ -830,7 +928,7 @@ mod tests {
             let strict = Scratch::new("strict");
             strict.write(STEM, "[contrast]\nmin = 21.0\n");
             let lenient = Scratch::new("lenient");
-            lenient.write(STEM, "[contrast]\nmin = 3.0\n");
+            lenient.write(STEM, "[contrast]\nmin = 4.5\n");
             let root = Capability::root();
             assert_eq!(
                 json_face(&config_with(over(&strict)), CONFIG_IRI, &root)["contrast"]["min"],
@@ -838,7 +936,7 @@ mod tests {
             );
             assert_eq!(
                 json_face(&config_with(over(&lenient)), CONFIG_IRI, &root)["contrast"]["min"],
-                3.0
+                4.5
             );
         }
 

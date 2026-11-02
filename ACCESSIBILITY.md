@@ -39,26 +39,32 @@ These are the behaviors a host can rely on. Each is pinned by a test named under
   `(L1 + 0.05) / (L2 + 0.05)` ratio as WCAG 2.x defines them (SC 1.4.3). The code uses the
   0.03928 linearization threshold of the WCAG 2.0 text; WCAG 2.2 states 0.04045. No 8-bit channel
   value falls between the two, and every color this crate measures is 8-bit, so the results are
-  the same. A ratio is compared unrounded: 4.49:1 fails a 4.5 floor.
+  the same. A ratio is compared unrounded: 4.49:1 fails a 4.5 floor. `urn:a11y:contrast` shows a
+  ratio to two decimals, or to as many more as it takes to keep the number on the side of the
+  floor its verdict is on, so a failing 4.4998:1 reads `4.4998 fail`, never `4.50 fail`.
 - **A translucent foreground is composited over its ground before it is measured**, so a fully
   transparent color measures 1:1, not the ratio of the color it names. A translucent background is
   taken as written, because what lies behind it is not known here.
 - **Two floors, as WCAG has them**: `contrast.min` (body text, default 4.5:1, SC 1.4.3) and
   `contrast.min_large` (large text and user interface components, default 3:1, SC 1.4.3 and
-  1.4.11). 7.0 is the AAA body-text floor (SC 1.4.6), if an operator sets it.
+  1.4.11). An operator may raise either (7.0 is the AAA body-text floor, SC 1.4.6) but not lower
+  it below WCAG AA.
 - **The floor pass repairs in the theme's own palette.** `css::apply_floor` (and
   `themes::theme_css` with feature `themes`) lifts every `color:` declaration below the floor to
   the theme's own default foreground, measured against the rule's own `background-color` when it
   sets one and the theme's ground otherwise. It reaches rules nested in `@media` blocks, leaves
   every other byte unchanged, and is idempotent. A rule it cannot repair (because the foreground
   would not clear the floor on that ground either) is left as the theme wrote it and listed in
-  `unrepaired`; nothing is hidden and no new color is invented.
+  `unrepaired`; a value it cannot read is left as written and listed by `skipped()`. Nothing is
+  hidden and no new color is invented.
 - **A host can prove its configured floor reached its output**: run `apply_floor` again over the
-  generated stylesheet at the configured floor and assert that `lifted` is empty. The README,
+  generated stylesheet at the configured floor and assert that `lifted` is empty (and that
+  `skipped()` is empty, for a value the pass cannot read is never lifted). The README,
   "Proving the config reached the output", explains why this is an assertion and not a heuristic.
-- **The configuration is loud.** An unknown key, an unknown theme name, a floor outside 1.0 to
-  21.0 or a text scale outside 0.5 to 4.0 is an error that names the field; nothing silently falls
-  back to a default. Layers merge key by key, so an application's override cannot drop the shared
+- **The configuration is loud.** An unknown key, an unknown theme name, a `contrast.min` outside
+  4.5 to 21.0, a `contrast.min_large` outside 3.0 to 21.0 or a text scale outside 0.5 to 4.0 is an
+  error that names the field (and, for a floor set too low, the WCAG floor it fell below);
+  nothing silently falls back to a default. Layers merge key by key, so an application's override cannot drop the shared
   floor by omission.
 - **Reduced motion is never assumed off.** `motion.reduce` left unset means "unstated": the host is
   expected to defer to the operating system through `prefers-reduced-motion` (SC 2.3.3).
@@ -77,16 +83,19 @@ These are the behaviors a host can rely on. Each is pinned by a test named under
   `text-decoration-color`, shadows or other non-text colors (SC 1.4.11), and it reads a rule's
   ground from `background-color` only: a `background:` shorthand, an inherited ground or another
   rule's background is not seen.
-- **A color it cannot read is skipped without a report**: named colors (`red`), `hsl()` and other
-  color functions, `var()` and a value with `!important` are neither lifted nor listed in
-  `unrepaired`. The pass reads hex (what `syntect` generates) and CSS Color 4 `rgb()`/`rgba()`.
+- **A color it cannot read is not measured**: named colors (`red`), `hsl()` and other color
+  functions, `var()` and a value with `!important` are not lifted. They are listed by
+  `FloorPass::skipped()`, with an unreadable `background-color` of a rule that sets a `color`, and
+  `clears_floor()` is false while any remain. The pass reads hex (what `syntect` generates) and CSS
+  Color 4 `rgb()`/`rgba()`.
 - **The pass judges every rule against the body-text floor.** It does not know which text is
   large, so `min_large` is stated for hosts to use and is not applied by the pass.
 - **A configured theme is not refused for being unrepairable.** At the default 4.5:1 floor, 22 of
   the 32 embedded themes keep at least one rule the pass cannot repair, including the default dark
   theme (below). The pass reports those rules; the config accepts the theme.
-- **A floor below WCAG AA is accepted.** `contrast.min` may be set anywhere from 1.0 to 21.0; this
-  crate does not refuse an operator's floor below 4.5.
+- **`urn:a11y:contrast` judges against any floor from 1 to 21.** It answers a question about two
+  colors, so a `min` of 3.0 (large text, non-text contrast) is a fair question there; a `min`
+  outside 1 to 21 is refused.
 - **Nothing here measures layout, focus, keyboard use, names and roles, or anything else a page
   is judged on.** This crate covers contrast, and carries the presentation settings; the rest is
   each host's.
@@ -129,11 +138,11 @@ with a failing check. The theme survey is an example run by hand.
 
 | Check | Version | What it covers | What it does not cover |
 |---|---|---|---|
-| `src/color.rs` tests (9) | `cargo test` | The scale's anchors (21:1, 1:1), symmetry, known pairs (1.03:1, 7.63:1, 3.23:1), every hex form, CSS Color 4 `rgb()`/`rgba()` vectors (comma and space forms, percentages, `/` alpha, `none`, clamping) and the malformed forms refused, refusal of names and other functions, an error that names the accepted forms, alpha compositing | Non-sRGB color spaces; the 0.04045 threshold is not tested separately (no 8-bit value lies between the two) |
-| `src/css.rs` tests (12) | `cargo test` | Lifting below the floor and leaving the rest byte-identical, `background-color` not mistaken for `color`, a rule's own ground, `@media` nesting, comments, compound selectors, unparseable values left alone, unrepairable themes and rules reported, idempotence, translucent colors, an `rgba()` color and an `rgb()` ground measured like their hex spellings | Non-`color` properties, the `background` shorthand, inherited grounds, large text |
+| `src/color.rs` tests (10) | `cargo test` | The scale's anchors (21:1, 1:1), symmetry, known pairs (1.03:1, 7.63:1, 3.23:1), every hex form and a doubled `#` refused, CSS Color 4 `rgb()`/`rgba()` vectors (comma and space forms, percentages, `/` alpha, `none`, clamping) and the malformed forms refused, refusal of names and other functions, an error that names the accepted forms, alpha compositing | Non-sRGB color spaces; the 0.04045 threshold is not tested separately (no 8-bit value lies between the two) |
+| `src/css.rs` tests (14) | `cargo test` | Lifting below the floor and leaving the rest byte-identical, `background-color` not mistaken for `color`, a rule's own ground, `@media` nesting, comments, compound selectors, unreadable values left alone and listed by `skipped()`, unrepairable themes and rules reported, idempotence, translucent colors, an `rgba()` color and an `rgb()` ground measured like their hex spellings | Non-`color` properties, the `background` shorthand, inherited grounds, large text |
 | `src/themes.rs` tests (4, feature `themes`) | `two-face` 0.5, `syntect` 5.3 (caret pins) | The theme table matches `two-face`; both name spellings resolve; the two default themes' ground and foreground; the pass reaches the rule ikigai-browse once patched by hand, idempotently | Any theme beyond the two defaults (the survey below covers all 32, by hand) |
-| `src/config.rs` and `src/load.rs` tests (24) | `cargo test` | Key-wise merge (a shared floor survives an override), unknown keys, themes and out-of-range numbers refused, unstated reduced motion, the three faces, and that the presentation view can never carry a person fact | Whether any host honors the settings |
-| `src/endpoints.rs` tests (21) and `tests/conformance.rs` (2) | `ikigai-conformance` 0.8 | `urn:a11y:contrast` (ratio, verdict, no capability, refusals), the gated and ungated views, golden threads; the module recipe as one test | Everything rendered by a host |
+| `src/config.rs` and `src/load.rs` tests (25) | `cargo test` | Key-wise merge (a shared floor survives an override), unknown keys, themes, out-of-range numbers and floors below WCAG AA refused, unstated reduced motion, the three faces, and that the presentation view can never carry a person fact | Whether any host honors the settings |
+| `src/endpoints.rs` tests (24) and `tests/conformance.rs` (2) | `ikigai-conformance` 0.8 | `urn:a11y:contrast` (ratio, verdict, no capability, refusals including a `min` outside 1 to 21, a failing ratio never shown at the floor), the gated and ungated views, golden threads; the module recipe as one test | Everything rendered by a host |
 | `examples/theme_survey.rs` (by hand) | as `themes` | Every embedded theme at a given floor: rules lifted, rules left, and whether the theme's own foreground clears the floor | Not run in CI |
 
 On 2026-10-15 (this file's review) all of them ran on main at `a494ed8`: 63 unit tests with
@@ -162,12 +171,9 @@ no interface of its own; its effect on people is only ever seen through a host's
 |---|---|---|---|
 | The default dark theme, Base16OceanDark, keeps 2 rules below 4.5:1 that the pass cannot repair, both on a background the rule paints itself: `.hl-meta.hl-separator` (4.01:1) and `.hl-invalid.hl-illegal` (3.23:1) | every host on the default dark theme | Those two kinds of token are harder to read in dark mode | A host can check `unrepaired` and choose another theme; InspiredGithub, the default light theme, is fully repaired |
 | 22 of 32 embedded themes cannot be fully repaired at 4.5:1 (and 24 at 7:1); the config accepts them | any host whose operator picks one | Some tokens stay below the floor | Pick a theme the survey lists as clean or fully repaired, or check `unrepaired` |
-| The floor pass skips named colors, `hsl()` and other color functions, `var()` and `!important` values without reporting them | `css::apply_floor` on CSS not generated by `syntect` | A failing color can pass unnoticed, and the "re-run the pass" proof cannot see it | Use hex or `rgb()`/`rgba()` colors in CSS that goes through the pass |
+| The floor pass does not measure named colors, `hsl()` and other color functions, `var()` and `!important` values; it lists them in `skipped()` | `css::apply_floor` on CSS not generated by `syntect` | Such a color is not repaired, and the "re-run the pass" proof covers it only if the host also asserts `skipped()` is empty | Use hex or `rgb()`/`rgba()` colors in CSS that goes through the pass |
 | The pass reads `background-color` only, not the `background` shorthand or an inherited ground | `css::apply_floor` | A rule can be judged against the wrong ground, either way | Write `background-color` explicitly |
 | Only `color` is measured; non-text contrast (borders, outlines, focus indicators) is not | `css::apply_floor` | A 3:1 failure on a user interface component is not found (SC 1.4.11) | Measure those pairs with `urn:a11y:contrast` |
-| `urn:a11y:contrast`'s text face rounds to two decimals, so a ratio just under a floor reads as `4.50 fail` | `urn:a11y:contrast` | A confusing answer for a person reading it | The JSON face carries `passes` beside the ratio |
-| A floor below 4.5 is accepted, and `urn:a11y:contrast` takes any `min` without a range check | the config, `urn:a11y:contrast` | A deployment can hold itself to less than AA without being told | none: it is the operator's decision |
-| Two README tables have empty header cells ("Where the line is drawn" and "Layout") | the README on GitHub and crates.io | A screen reader announces blank column headers | The rows read in order |
 | The README and rustdoc have not been checked by any accessibility tool or person | documentation | Unknown | Report what you meet (below) |
 
 No list like this is complete. Please report what you find.

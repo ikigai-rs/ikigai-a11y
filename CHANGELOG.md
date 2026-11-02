@@ -10,6 +10,33 @@
   clamped and fractional channels rounded. The floor pass and `urn:a11y:contrast` therefore measure
   a tint written as `rgba(…)` instead of skipping or refusing it. Named colors, `hsl()`, `var()` and
   `calc()` are still refused. The parse error now names the `rgb()`/`rgba()` forms too.
+- `FloorPass::skipped()` and `css::Skip` (ledger #1652, point 3): every value the floor pass needed
+  and could not read (a named color, `hsl()`, `var()`, a value with `!important`, and the
+  unreadable `background-color` of a rule that sets a `color`) is listed instead of being dropped
+  silently. The pass still leaves each one exactly as written.
+
+### Changed
+
+- `FloorPass::clears_floor()` is false while `skipped()` lists anything: a value the pass could
+  not read is not proved to clear the floor.
+- `contrast.min` below 4.5 and `contrast.min_large` below 3.0 (WCAG AA) are refused at load, with
+  an error that names the WCAG floor (ledger #1652, point 7). Before, any floor from 1.0 to 21.0
+  was accepted. An operator may still raise either floor up to 21.0.
+- `urn:a11y:contrast` refuses a `min` outside 1 to 21 (and `NaN` or infinity) with
+  `InvalidArgument`, naming the WCAG floors. A `min` below 4.5 stays legal there: 3.0 is the
+  large-text and non-text floor.
+- `urn:a11y:contrast` never shows a failing ratio at the floor it failed (ledger #1652, point 8):
+  the text face uses two decimals, or as many more as it takes to keep the number on the side of
+  the floor its verdict is on, so #d010d0 on white reads `4.4998 fail`, not `4.50 fail`. The JSON
+  face's `ratio` is the same number.
+
+### Fixed
+
+- `Rgba::parse` strips exactly one leading `#` (ledger #2907): `##fff` was read as white and is
+  now an error.
+- American spelling throughout the code, tests, endpoint descriptions and README ("color", not
+  "colour"); the description text of `urn:a11y:contrast`'s `on` argument changes accordingly.
+- The two README tables with empty header cells now have headers.
 
 ## 0.4.0
 

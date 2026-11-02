@@ -38,7 +38,7 @@
 //!   `a11y.toml` ⊕ `{app}.a11y.toml`. A layer states only its differences, and
 //!   every key it stays silent about survives from below.
 //! - [`css`] — the contrast-floor pass: lift a generated stylesheet's sub-floor
-//!   colours to the theme's own default foreground, repairing in-palette and
+//!   colors to the theme's own default foreground, repairing in-palette and
 //!   inventing nothing.
 //!
 //! [`load`] (native) reads the layered files from `ikigai_core::config`'s config
@@ -84,7 +84,7 @@ pub use color::{ratio, ParseColorError, Rgba};
 pub use config::{
     canonical_theme, A11y, ConfigError, Contrast, Motion, Patch, Presentation, Text, Theme, THEMES,
 };
-pub use css::{apply_floor, FloorPass, Lift};
+pub use css::{apply_floor, FloorPass, Lift, Skip};
 #[allow(deprecated)] // `effective` is re-exported for the consumers that pinned it
 #[cfg(not(target_family = "wasm"))]
 pub use endpoints::{

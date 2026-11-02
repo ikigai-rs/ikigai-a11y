@@ -225,7 +225,7 @@ fn a_cut_on_the_declared_thread_recomputes() {
     );
 
     // The operator lowers the floor. Nothing in this module notices.
-    std::fs::write(home.join("a11y.toml"), SHARED.replace("7.0", "3.0")).unwrap();
+    std::fs::write(home.join("a11y.toml"), SHARED.replace("7.0", "5.0")).unwrap();
     let stale = read();
     assert_eq!(
         stale, first,
@@ -241,7 +241,8 @@ fn a_cut_on_the_declared_thread_recomputes() {
     );
     kernel.cut(threads[0].clone());
     let fresh = read();
-    assert!(fresh.contains("3.0"), "recomputed after the cut: {fresh}");
+    // 5.0, not 3.0: `min_large` is 3.0 in every face, so 3.0 would prove nothing.
+    assert!(fresh.contains("5.0"), "recomputed after the cut: {fresh}");
     assert!(!fresh.contains("7.0"), "{fresh}");
 
     std::fs::remove_dir_all(&home).ok();

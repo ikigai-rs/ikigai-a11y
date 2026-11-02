@@ -3,7 +3,7 @@
 //! contrast floor already applied.
 //!
 //! Optional and off by default. `two-face` carries ~2MB of embedded theme data
-//! and pulls in `syntect`; a consumer that only wants the contrast maths, the
+//! and pulls in `syntect`; a consumer that only wants the contrast math, the
 //! layered merge or the CSS floor pass — the browser demo, say — needs none of
 //! it, and the default build stays wasm-clean without it.
 //!
@@ -117,7 +117,7 @@ fn convert(color: Color) -> Rgba {
     }
 }
 
-/// A theme's own ground and default foreground — the two colours the floor pass
+/// A theme's own ground and default foreground — the two colors the floor pass
 /// measures against and repairs to.
 ///
 /// A theme that declares neither is read as black on white, which is what a
@@ -195,7 +195,7 @@ mod tests {
 
     /// The generalization claim, checked on the exact case that made
     /// ikigai-browse hand-write DARK_PARAMETER: the pass lifts `.hl-variable`'s
-    /// red to `#c0c5ce` — the same colour, from the theme, without the constant.
+    /// red to `#c0c5ce` — the same color, from the theme, without the constant.
     #[test]
     fn the_pass_reaches_the_rule_dark_parameter_was_written_for() {
         let pass = theme_css(EmbeddedThemeName::Base16OceanDark, "hl-", 4.5);
