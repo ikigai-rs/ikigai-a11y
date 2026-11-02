@@ -178,7 +178,7 @@ pub fn load_in(home: &Path, app: Option<&str>) -> Result<A11y, ConfigError> {
 pub fn complete_in(home: &Path, app: Option<&str>) -> Result<A11y, ConfigError> {
     let mut effective = A11y::default();
     for path in layered_paths_in(home, STEM, app) {
-        let text = match std::fs::read_to_string(&path) {
+        let text = match read_layer(&path) {
             Ok(text) => text,
             // Absent is the normal case and means "this layer states nothing".
             // Anything else — a permissions problem, a directory where a file
@@ -196,6 +196,19 @@ pub fn complete_in(home: &Path, app: Option<&str>) -> Result<A11y, ConfigError> 
         effective.layers.push(path);
     }
     Ok(effective)
+}
+
+/// Read one layer file off disk: the crate's only ambient read, kept in its own item so the
+/// exception covers this call and nothing else.
+///
+/// Two paths reach it, both inside a config home a HOST chose: a host calling [`complete_in`]
+/// or [`presentation_in`] directly, and the `urn:a11y:config` and `urn:a11y:presentation`
+/// endpoints through the home their [`crate::A11yHandle`] was mounted with. Only
+/// the [`layered_paths_in`] candidates are ever read, and every one of them is a golden thread
+/// (`urn:file:{path}`, see [`threads_in`]), so a watcher's cut still recomputes the answer.
+#[allow(clippy::disallowed_methods)] // ambient: fs: reads only the a11y.toml layer candidates inside the config home the host passed or mounted (host loader and urn:a11y:config/presentation alike); replaced by a config-home resource under ledger #2400
+fn read_layer(path: &Path) -> std::io::Result<String> {
+    std::fs::read_to_string(path)
 }
 
 #[cfg(test)]
