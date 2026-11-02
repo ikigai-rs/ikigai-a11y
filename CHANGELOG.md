@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.4.1
+## 0.5.0
+
+A minor, not a patch: an `a11y.toml` whose `contrast.min` is below 4.5 (or `contrast.min_large`
+below 3.0) loaded before and is refused now, so a consumer on `^0.4` keeps the old loader until
+it moves its pin. No other change in this release breaks a caller.
 
 ### Added
 
