@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.1
+
+### Added
+
+- `Rgba::parse` reads CSS Color 4 `rgb()` and `rgba()` as well as hex (ledger #2904): the comma
+  form (channels all numbers or all percentages, optional alpha) and the space form (mixed
+  channels, `none`, alpha after `/`), with alpha as a number or a percentage, out-of-range values
+  clamped and fractional channels rounded. The floor pass and `urn:a11y:contrast` therefore measure
+  a tint written as `rgba(…)` instead of skipping or refusing it. Named colors, `hsl()`, `var()` and
+  `calc()` are still refused. The parse error now names the `rgb()`/`rgba()` forms too.
+
 ## 0.4.0
 
 ### Changed

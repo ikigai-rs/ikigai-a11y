@@ -491,7 +491,10 @@ pub fn contrast() -> FnEndpoint {
             .verb(Verb::Meta)
             .input(
                 ArgSpec::new("from")
-                    .summary("the foreground colour, as #rgb, #rgba, #rrggbb or #rrggbbaa")
+                    .summary(
+                        "the foreground color, as hex (#rgb, #rgba, #rrggbb or #rrggbbaa) or CSS \
+                         rgb()/rgba()",
+                    )
                     .class(XSD_STRING),
             )
             .input(
@@ -611,6 +614,15 @@ mod tests {
 
         let rep = invoke(&contrast(), contrast_request("#323232", "#2b303b"), &cap).unwrap();
         assert_eq!(String::from_utf8_lossy(&rep.bytes), "1.03 fail");
+
+        // CSS rgb()/rgba() reads the same as hex (ledger #2904).
+        let rep = invoke(
+            &contrast(),
+            contrast_request("rgb(0 0 0)", "rgba(255, 255, 255, 1)"),
+            &cap,
+        )
+        .unwrap();
+        assert_eq!(String::from_utf8_lossy(&rep.bytes), "21.00 pass");
     }
 
     /// Pure arithmetic needs no authority — an agent holding nothing at all can
