@@ -40,12 +40,13 @@ pub struct Lift {
 /// A rule below the floor that the pass did **not** rewrite, because the
 /// theme's own foreground would not clear the floor on that rule's ground
 /// either — so there is no in-palette repair, and inventing one is not this
-/// pass's business.
+/// pass's business. A rule that paints a ground and sets no color is one of these
+/// when the foreground its text inherits does not clear that ground.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Finding {
     /// The rule's selector, as written.
     pub selector: String,
-    /// The color it declares.
+    /// The color it declares, or the theme's foreground when it declares none.
     pub color: Rgba,
     /// The ratio it achieves against its ground.
     pub ratio: f64,
@@ -56,7 +57,8 @@ pub struct Finding {
 pub struct Skip {
     /// The rule's selector, as written.
     pub selector: String,
-    /// `color`, or `background-color` when the rule's own ground is unreadable.
+    /// `color`, or `background-color` or `background` when the rule's own ground
+    /// is unreadable.
     pub property: &'static str,
     /// The declared value, as written.
     pub value: String,
@@ -97,11 +99,11 @@ impl FloorPass {
     }
 
     /// Every value the pass needed and could not read, rule by rule in source
-    /// order (within a rule, `color` before `background-color`): the
-    /// `color` of a rule written as a named color, `hsl()`, `var()`, a value
-    /// carrying `!important`, or anything else [`Rgba::parse`] refuses, and the
-    /// `background-color` of a rule that declares a `color` when that ground is
-    /// unreadable (the rule is then judged against the page ground instead).
+    /// order (within a rule, `color` before its ground): the `color` of a rule
+    /// written as a named color, `hsl()`, `var()`, a value carrying `!important`, or
+    /// anything else [`Rgba::parse`] refuses, and the `background-color` or
+    /// `background` of a rule that declares a `color` when that ground is unreadable,
+    /// as an image is (the rule is then judged against the page ground instead).
     ///
     /// The pass leaves each of these exactly as written, so they are found in
     /// [`css`](Self::css). None of them was measured, which is why a re-run of the
@@ -115,10 +117,12 @@ impl FloorPass {
 /// `min` to `foreground`, leaving everything else — including every declaration
 /// that already clears the floor — byte-for-byte unchanged.
 ///
-/// A rule that declares its own `background-color` is measured against **that**,
-/// not against the page ground: a rule which repaints its own ground has changed
-/// what its text sits on. Translucent colors are composited before measuring
-/// (see [`crate::color`]).
+/// A rule that paints its own ground, with `background-color` or the `background`
+/// shorthand, is measured against **that**, not against the page ground: a rule
+/// which repaints its own ground has changed what its text sits on. If it sets no
+/// color its text inherits one, so the theme's foreground is measured there and a
+/// failure is reported in [`FloorPass::unrepaired`]. Translucent colors are
+/// composited before measuring (see [`crate::color`]).
 ///
 /// A value the pass cannot read (a named color, `hsl()`, `var()`, `!important`)
 /// is left as written and listed by [`FloorPass::skipped`], never dropped.
@@ -131,11 +135,21 @@ pub fn apply_floor(css: &str, ground: Rgba, foreground: Rgba, min: f64) -> Floor
     for block in declaration_blocks(css) {
         let body = &css[block.body.clone()];
         // The rule's own ground, if it repaints one.
-        let local_ground = declaration(body, "background-color")
-            .and_then(|d| Rgba::parse(&body[d.value.clone()]).ok())
-            .map(|bg| bg.over(ground))
-            .unwrap_or(ground);
-        let Some(color) = declaration(body, "color") else {
+        let painted = declaration(body, GROUND)
+            .and_then(|d| painted_ground(d.property, &body[d.value]).ok())
+            .flatten();
+        let local_ground = painted.map_or(ground, |bg| bg.over(ground));
+        let Some(color) = declaration(body, &["color"]) else {
+            // Its text inherits a color, and the one this pass knows is the
+            // theme's foreground. There is no declaration to lift: report the pair.
+            let achieved = ratio(foreground, local_ground);
+            if painted.is_some() && achieved < min {
+                unrepaired.push(Finding {
+                    selector: css[block.selector.clone()].trim().to_string(),
+                    color: foreground,
+                    ratio: achieved,
+                });
+            }
             continue;
         };
         let Ok(current) = Rgba::parse(&body[color.value.clone()]) else {
@@ -183,27 +197,30 @@ pub fn apply_floor(css: &str, ground: Rgba, foreground: Rgba, min: f64) -> Floor
 }
 
 /// The values [`apply_floor`] needs and cannot read, by the same reading it does:
-/// each rule's `color`, and the `background-color` of a rule that has a `color`.
+/// each rule's `color`, and the ground of a rule that has a `color`.
 fn unread(css: &str) -> Vec<Skip> {
     let mut skipped = Vec::new();
     for block in declaration_blocks(css) {
         let body = &css[block.body.clone()];
-        let Some(color) = declaration(body, "color") else {
+        let Some(color) = declaration(body, &["color"]) else {
             continue;
         };
         let selector = css[block.selector.clone()].trim();
-        for (property, decl) in [
-            ("color", Some(color)),
-            ("background-color", declaration(body, "background-color")),
-        ] {
-            let Some(decl) = decl else { continue };
-            let value = &body[decl.value];
-            if Rgba::parse(value).is_err() {
-                skipped.push(Skip {
-                    selector: selector.to_string(),
-                    property,
-                    value: value.to_string(),
-                });
+        let mut skip = |property, value: &str| {
+            skipped.push(Skip {
+                selector: selector.to_string(),
+                property,
+                value: value.to_string(),
+            });
+        };
+        let value = &body[color.value];
+        if Rgba::parse(value).is_err() {
+            skip(color.property, value);
+        }
+        if let Some(own) = declaration(body, GROUND) {
+            let value = &body[own.value];
+            if painted_ground(own.property, value).is_err() {
+                skip(own.property, value);
             }
         }
     }
@@ -269,12 +286,17 @@ fn declaration_blocks(css: &str) -> Vec<Block> {
     blocks
 }
 
-/// One declaration's spans within a block body.
+/// One declaration within a block body: which property, and its value's span.
 struct Decl {
+    property: &'static str,
     value: std::ops::Range<usize>,
 }
 
-/// Find the value span of the `property` declaration that CSS applies in a
+/// The two properties that set a rule's own ground. Each overrides the other, so
+/// whichever applies is the one that decides it.
+const GROUND: &[&str] = &["background-color", "background"];
+
+/// Find the value span of the declaration CSS applies among `properties` in a
 /// declaration block body, matching the property name EXACTLY — `color` must not
 /// match `background-color`, which is the whole difficulty of doing this with
 /// string search.
@@ -289,7 +311,7 @@ struct Decl {
 /// browser refuses from one it accepts and [`Rgba::parse`] does not (a named
 /// color). Either way the applied value is listed by [`FloorPass::skipped`] when
 /// it does not parse, so nothing it is unsure of reads as clearing the floor.
-fn declaration(body: &str, property: &str) -> Option<Decl> {
+fn declaration(body: &str, properties: &[&'static str]) -> Option<Decl> {
     let mut last = None;
     let mut last_important = None;
     let mut offset = 0usize;
@@ -299,9 +321,10 @@ fn declaration(body: &str, property: &str) -> Option<Decl> {
         let Some(colon) = piece.find(':') else {
             continue;
         };
-        if piece[..colon].trim() != property {
+        let name = piece[..colon].trim();
+        let Some(property) = properties.iter().copied().find(|p| *p == name) else {
             continue;
-        }
+        };
         let raw = &piece[colon + 1..];
         let leading = raw.len() - raw.trim_start().len();
         let trimmed = raw.trim();
@@ -310,6 +333,7 @@ fn declaration(body: &str, property: &str) -> Option<Decl> {
         }
         let value_start = start + colon + 1 + leading;
         let decl = Decl {
+            property,
             value: value_start..value_start + trimmed.len(),
         };
         if is_important(trimmed) {
@@ -319,6 +343,87 @@ fn declaration(body: &str, property: &str) -> Option<Decl> {
         }
     }
     last_important.or(last)
+}
+
+/// The color a ground declaration paints: `Ok(None)` when it paints none, `Err`
+/// when the pass cannot read what it paints.
+fn painted_ground(property: &str, value: &str) -> Result<Option<Rgba>, ()> {
+    if property == "background" {
+        return shorthand_color(value);
+    }
+    Rgba::parse(value).map(Some).map_err(drop)
+}
+
+/// The color component of a `background` shorthand, which CSS allows in any
+/// position. Only a single layer with no image is read: an image, a gradient or
+/// a second layer has no one color to measure against, and `!important` or a
+/// color the parser refuses is unread here just as it is in `background-color`.
+/// With no image, a position, size, repeat, attachment or box paints nothing.
+fn shorthand_color(value: &str) -> Result<Option<Rgba>, ()> {
+    let mut color = None;
+    for part in shorthand_parts(value) {
+        if paints_nothing(part) {
+            continue;
+        }
+        let parsed = Rgba::parse(part).map_err(drop)?;
+        if color.replace(parsed).is_some() {
+            return Err(());
+        }
+    }
+    Ok(color)
+}
+
+/// A shorthand's parts, split at spaces and `/` outside parentheses.
+fn shorthand_parts(value: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (i, c) in value.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            '/' | ' ' | '\t' | '\n' | '\r' | '\x0c' if depth == 0 => {
+                parts.push(&value[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&value[start..]);
+    parts.retain(|part| !part.is_empty());
+    parts
+}
+
+/// Whether a shorthand part leaves the color unaffected and adds no image: a
+/// number, length or percentage (position, size), or one of the keywords.
+fn paints_nothing(part: &str) -> bool {
+    const KEYWORDS: &[&str] = &[
+        "none",
+        "repeat",
+        "repeat-x",
+        "repeat-y",
+        "no-repeat",
+        "space",
+        "round",
+        "scroll",
+        "fixed",
+        "local",
+        "border-box",
+        "padding-box",
+        "content-box",
+        "center",
+        "top",
+        "bottom",
+        "left",
+        "right",
+        "auto",
+        "cover",
+        "contain",
+    ];
+    // The sign is stripped first: `-webkit-linear-gradient(…)` is an image.
+    part.trim_start_matches(['+', '-'])
+        .starts_with(|c: char| c.is_ascii_digit() || c == '.')
+        || KEYWORDS.iter().any(|k| part.eq_ignore_ascii_case(k))
 }
 
 /// Whether a declaration's value carries the `!important` flag (`!` and the
@@ -606,6 +711,117 @@ mod tests {
         let skips = apply_floor(css, ground, foreground, 4.5).skipped();
         assert_eq!(skips.len(), 1, "{skips:?}");
         assert_eq!(skips[0].value, "#bf616a !important");
+    }
+
+    /// A `background` shorthand paints the rule's ground exactly as a
+    /// `background-color` does (ledger #1652, point 4). White text passes on the
+    /// dark page ground, so reading only `background-color` calls this rule clean
+    /// while its text renders at 1.16:1 on the color it paints.
+    #[test]
+    fn a_background_shorthand_is_the_ground_measured_against() {
+        let (ground, foreground) = dark();
+        let css = ".hl-x {\n background: #eeeeee;\n color: #ffffff;\n}\n";
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert_eq!(pass.unrepaired.len(), 1, "{pass:?}");
+        assert_eq!(pass.css, css);
+
+        // The converse: on its own black ground this red passes (it is 3.23:1 on
+        // the page), so a shorthand ground saves it from a false lift. The color
+        // is found among the shorthand's other parts.
+        let css = ".hl-y {\n background: no-repeat center / cover #000000;\n color: #bf616a;\n}\n";
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert!(pass.lifted.is_empty(), "{:?}", pass.lifted);
+        assert!(pass.clears_floor(), "{pass:?}");
+    }
+
+    /// Of `background` and `background-color`, the later one applies, because the
+    /// shorthand resets the color: `background: none` takes a ground away.
+    #[test]
+    fn the_later_of_the_shorthand_and_the_longhand_is_the_ground() {
+        let (ground, foreground) = dark();
+        for css in [
+            ".x {\n background: #000000;\n background-color: #eeeeee;\n color: #ffffff;\n}\n",
+            ".x {\n background-color: #000000;\n background: #eeeeee;\n color: #ffffff;\n}\n",
+        ] {
+            let pass = apply_floor(css, ground, foreground, 4.5);
+            assert_eq!(pass.unrepaired.len(), 1, "{css}: {pass:?}");
+        }
+        // No paint: the white text sits on the dark page ground, where it passes.
+        let css = ".x {\n background-color: #eeeeee;\n background: none;\n color: #ffffff;\n}\n";
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert!(pass.clears_floor(), "{pass:?}");
+    }
+
+    /// A shorthand whose ground cannot be read is listed, not guessed at: an image
+    /// has no one color to measure, whatever color is painted beneath it.
+    #[test]
+    fn a_shorthand_the_pass_cannot_read_is_listed() {
+        let (ground, foreground) = dark();
+        for value in [
+            "url(tile.png)",
+            "url(tile.png) #000000",
+            "linear-gradient(#000000, #ffffff)",
+            "-webkit-linear-gradient(#000000, #ffffff)",
+            "url(a.png), #000000",
+            "red",
+            "var(--bg)",
+            "#000000 !important",
+            "#000000 #111111",
+        ] {
+            let css = format!(".x {{\n background: {value};\n color: #ffffff;\n}}\n");
+            let pass = apply_floor(&css, ground, foreground, 4.5);
+            assert_eq!(pass.css, css);
+            let skips = pass.skipped();
+            assert_eq!(skips.len(), 1, "{value}: {skips:?}");
+            assert_eq!(skips[0].property, "background");
+            assert_eq!(skips[0].value, value);
+            assert!(!pass.clears_floor(), "{value}");
+        }
+    }
+
+    /// A rule that paints a ground and sets no color has its text inherit one, so
+    /// the pair is judged with the theme's foreground. SolarizedDark's `.hl-invalid`
+    /// is this rule, at 3.16:1, and the pass used to call that theme fully repaired.
+    #[test]
+    fn a_ground_painted_without_a_color_is_judged_with_the_foreground() {
+        let ground = Rgba::parse("#002b36").unwrap();
+        let foreground = Rgba::parse("#839496").unwrap();
+        for css in [
+            ".hl-invalid {\n background-color: #6e2e32;\n}\n",
+            ".hl-invalid {\n background: #6e2e32;\n}\n",
+        ] {
+            let pass = apply_floor(css, ground, foreground, 4.5);
+            assert_eq!(pass.css, css, "no color to lift, and none is invented");
+            assert_eq!(pass.unrepaired.len(), 1, "{pass:?}");
+            assert_eq!(pass.unrepaired[0].selector, ".hl-invalid");
+            assert_eq!(pass.unrepaired[0].color, foreground);
+            assert!((pass.unrepaired[0].ratio - 3.16).abs() < 0.01);
+            assert!(!pass.clears_floor());
+        }
+
+        // A ground the foreground clears is not a finding.
+        let css = ".hl-ok {\n background-color: #000000;\n}\n";
+        assert!(apply_floor(css, ground, foreground, 4.5).clears_floor());
+    }
+
+    /// Stated limits, pinned so that closing one has to change this test and
+    /// ACCESSIBILITY.md together (ledger #1652, points 5 and 6): only `color` is
+    /// measured, against the one floor the caller gave, whatever the text's size.
+    #[test]
+    fn non_text_colors_and_text_size_are_not_considered() {
+        let (ground, foreground) = dark();
+        // A border the ground's own color is invisible (SC 1.4.11), and not seen.
+        let css =
+            ".hl-x {\n border-color: #2b303b;\n outline-color: #2b303b;\n color: #c0c5ce;\n}\n";
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert_eq!(pass.css, css);
+        assert!(pass.clears_floor());
+
+        // Bold 24px text at 3.23:1 clears WCAG's 3:1 large-text floor, and is lifted
+        // all the same. The stricter reading, so it never lets a failure through.
+        let css = ".hl-y {\n font-size: 24px;\n font-weight: bold;\n color: #bf616a;\n}\n";
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert_eq!(pass.lifted.len(), 1, "{pass:?}");
     }
 
     /// A tint written as `rgba(…)` is measured like its hex spelling (ledger

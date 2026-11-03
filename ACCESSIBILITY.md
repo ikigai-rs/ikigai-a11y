@@ -20,7 +20,7 @@ Adapted from the [ACCESSIBILITY.md template](https://github.com/mgifford/ACCESSI
 | Private channel | [private vulnerability reporting](https://github.com/ikigai-rs/ikigai-a11y/security/advisories/new), for anything security-sensitive |
 | Target | WCAG 2.2 Level AA, for the parts of a host's output this crate decides, and for this repository's own documentation |
 | Status | Evaluation in progress. No conformance claim. |
-| Last reviewed | 2026-10-15 |
+| Last reviewed | 2026-11-02 |
 | Next review | when the contrast math, the floor pass or the config schema changes, when `two-face` or `syntect` changes version, or when WCAG changes its contrast definitions |
 
 ## Commitment
@@ -51,14 +51,16 @@ These are the behaviors a host can rely on. Each is pinned by a test named under
   it below WCAG AA.
 - **The floor pass repairs in the theme's own palette.** `css::apply_floor` (and
   `themes::theme_css` with feature `themes`) lifts every `color:` declaration below the floor to
-  the theme's own default foreground, measured against the rule's own `background-color` when it
-  sets one and the theme's ground otherwise. When a rule declares either property more than once,
+  the theme's own default foreground, measured against the ground the rule paints itself, with
+  `background-color` or the color of a single-layer `background` shorthand, and the theme's ground
+  otherwise. When a rule declares `color` or its ground more than once,
   the pass reads the one CSS applies: the last `!important` declaration if there is one, otherwise
   the last. It reaches rules nested in `@media` blocks, leaves
   every other byte unchanged, and is idempotent. A rule it cannot repair (because the foreground
   would not clear the floor on that ground either) is left as the theme wrote it and listed in
-  `unrepaired`; a value it cannot read is left as written and listed by `skipped()`. Nothing is
-  hidden and no new color is invented.
+  `unrepaired`, and so is a rule that paints a ground and sets no color when the theme's foreground
+  does not clear that ground; a value it cannot read is left as written and listed by `skipped()`.
+  Nothing is hidden and no new color is invented.
 - **A host can prove its configured floor reached its output**: run `apply_floor` again over the
   generated stylesheet at the configured floor and assert that `lifted` is empty (and that
   `skipped()` is empty, for a value the pass cannot read is never lifted). The README,
@@ -83,16 +85,22 @@ These are the behaviors a host can rely on. Each is pinned by a test named under
   what it does.
 - **The floor pass looks at `color` only.** It does not measure `border-color`, `outline-color`,
   `text-decoration-color`, shadows or other non-text colors (SC 1.4.11), and it reads a rule's
-  ground from `background-color` only: a `background:` shorthand, an inherited ground or another
-  rule's background is not seen.
+  ground from that rule's `background-color` or `background` only. A ground inherited from an
+  enclosing element or painted by another rule is not seen, because which rules apply to one
+  element is known only to a page. A `background-image` longhand is not seen either.
+- **A rule that paints a ground and sets no color is judged with the theme's foreground**, the
+  color its text inherits unless a page says otherwise. If that ground cannot be read, the rule is
+  not judged and not listed, since it declares no color to measure.
 - **A color it cannot read is not measured**: named colors (`red`), `hsl()` and other color
   functions, `var()` and a value with `!important` are not lifted. They are listed by
-  `FloorPass::skipped()`, with an unreadable `background-color` of a rule that sets a `color`, and
-  `clears_floor()` is false while any remain. The pass reads hex (what `syntect` generates) and CSS
-  Color 4 `rgb()`/`rgba()`.
+  `FloorPass::skipped()`, with an unreadable `background-color` or `background` of a rule that sets
+  a `color` (a shorthand with an image, a gradient or a second layer is unreadable, because it has
+  no one color to measure), and `clears_floor()` is false while any remain. The pass reads hex
+  (what `syntect` generates) and CSS Color 4 `rgb()`/`rgba()`.
 - **The pass judges every rule against the body-text floor.** It does not know which text is
-  large, so `min_large` is stated for hosts to use and is not applied by the pass.
-- **A configured theme is not refused for being unrepairable.** At the default 4.5:1 floor, 22 of
+  large, so `min_large` is stated for hosts to use and is not applied by the pass. That is the
+  stricter reading: large text can be lifted when it did not have to be, and no failure passes.
+- **A configured theme is not refused for being unrepairable.** At the default 4.5:1 floor, 23 of
   the 32 embedded themes keep at least one rule the pass cannot repair, including the default dark
   theme (below). The pass reports those rules; the config accepts the theme.
 - **`urn:a11y:contrast` judges against any floor from 1 to 21.** It answers a question about two
@@ -141,16 +149,23 @@ with a failing check. The theme survey is an example run by hand.
 | Check | Version | What it covers | What it does not cover |
 |---|---|---|---|
 | `src/color.rs` tests (10) | `cargo test` | The scale's anchors (21:1, 1:1), symmetry, known pairs (1.03:1, 7.63:1, 3.23:1), every hex form and a doubled `#` refused, CSS Color 4 `rgb()`/`rgba()` vectors (comma and space forms, percentages, `/` alpha, `none`, clamping) and the malformed forms refused, refusal of names and other functions, an error that names the accepted forms, alpha compositing | Non-sRGB color spaces; the 0.04045 threshold is not tested separately (no 8-bit value lies between the two) |
-| `src/css.rs` tests (14) | `cargo test` | Lifting below the floor and leaving the rest byte-identical, `background-color` not mistaken for `color`, a rule's own ground, `@media` nesting, comments, compound selectors, unreadable values left alone and listed by `skipped()`, unrepairable themes and rules reported, idempotence, translucent colors, an `rgba()` color and an `rgb()` ground measured like their hex spellings | Non-`color` properties, the `background` shorthand, inherited grounds, large text |
-| `src/themes.rs` tests (4, feature `themes`) | `two-face` 0.5, `syntect` 5.3 (caret pins) | The theme table matches `two-face`; both name spellings resolve; the two default themes' ground and foreground; the pass reaches the rule ikigai-browse once patched by hand, idempotently | Any theme beyond the two defaults (the survey below covers all 32, by hand) |
+| `src/css.rs` tests (22) | `cargo test` | Lifting below the floor and leaving the rest byte-identical, `background-color` not mistaken for `color`, a rule's own ground from `background-color` or the `background` shorthand, a ground painted with no color, `@media` nesting, comments, compound selectors, unreadable values left alone and listed by `skipped()`, unrepairable themes and rules reported, idempotence, translucent colors, an `rgba()` color and an `rgb()` ground measured like their hex spellings | Non-`color` properties, inherited grounds, large text (the first and last are pinned as limits) |
+| `src/themes.rs` tests (5, feature `themes`) | `two-face` 0.5, `syntect` 5.3 (caret pins) | The theme table matches `two-face`; both name spellings resolve; the two default themes' ground and foreground; the pass reaches the rule ikigai-browse once patched by hand, idempotently; the survey's totals at 4.5 and 7.0 and the default dark theme's two leftovers | The rules of any theme beyond the two defaults (the survey below lists all 32, by hand) |
 | `src/config.rs` and `src/load.rs` tests (25) | `cargo test` | Key-wise merge (a shared floor survives an override), unknown keys, themes, out-of-range numbers and floors below WCAG AA refused, unstated reduced motion, the three faces, and that the presentation view can never carry a person fact | Whether any host honors the settings |
 | `src/endpoints.rs` tests (24) and `tests/conformance.rs` (2) | `ikigai-conformance` 0.8 | `urn:a11y:contrast` (ratio, verdict, no capability, refusals including a `min` outside 1 to 21, a failing ratio never shown at the floor), the gated and ungated views, golden threads; the module recipe as one test | Everything rendered by a host |
-| `examples/theme_survey.rs` (by hand) | as `themes` | Every embedded theme at a given floor: rules lifted, rules left, and whether the theme's own foreground clears the floor | Not run in CI |
+| `examples/theme_survey.rs` (by hand) | as `themes` | Every embedded theme at a given floor: rules lifted, rules left, and whether the theme's own foreground clears the floor | The per-theme table is not run in CI; its totals are pinned by a test |
 
 On 2026-10-15 (this file's review) all of them ran on main at `a494ed8`: 63 unit tests with
 default features and 67 with all features, 2 conformance tests and 1 doctest passed. The survey
 at 4.5:1 reported 5 of 32 themes clearing the floor unaided, 5 more fully repaired by the pass,
 and 22 with rules left unrepaired; at 7:1, 0, 8 and 24.
+
+On 2026-11-02, after the pass began to read the `background` shorthand and to judge a ground
+painted with no color, 83 unit tests with default features and 88 with all features, 2 conformance tests and the
+doctests passed. The survey at 4.5:1 reported 5 of 32 themes clearing the floor
+unaided, 4 more fully repaired by the pass (SolarizedDark moved out: its `.hl-invalid` paints a
+ground its inherited text reaches at 3.16:1) and 23 with rules left unrepaired; at 7:1, 0, 8 and
+24, unchanged. No embedded theme writes the `background` shorthand.
 
 No accessibility checker (axe or similar) has been run on the README or the rustdoc.
 
@@ -162,6 +177,7 @@ Only what has actually been run. This is not a list of what is supported.
 |---|---|---|---|---|
 | GitHub Actions, the shared workflow's runner | none | none | `cargo test`, default and all features | every pull request and every push to main |
 | macOS | none | none | `cargo test` and the theme survey at 4.5 and 7.0 | 2026-10-15 |
+| Linux | none | none | `cargo test` and the theme survey at 4.5 and 7.0 | 2026-11-02 |
 
 **No screen reader, screen magnifier, speech-input or switch-access software has been used to test
 this repository or its documentation, and no browser has been run against either.** This crate has
@@ -172,9 +188,9 @@ no interface of its own; its effect on people is only ever seen through a host's
 | Barrier or gap | Where | Impact | Workaround |
 |---|---|---|---|
 | The default dark theme, Base16OceanDark, keeps 2 rules below 4.5:1 that the pass cannot repair, both on a background the rule paints itself: `.hl-meta.hl-separator` (4.01:1) and `.hl-invalid.hl-illegal` (3.23:1) | every host on the default dark theme | Those two kinds of token are harder to read in dark mode | A host can check `unrepaired` and choose another theme; InspiredGithub, the default light theme, is fully repaired |
-| 22 of 32 embedded themes cannot be fully repaired at 4.5:1 (and 24 at 7:1); the config accepts them | any host whose operator picks one | Some tokens stay below the floor | Pick a theme the survey lists as clean or fully repaired, or check `unrepaired` |
+| 23 of 32 embedded themes cannot be fully repaired at 4.5:1 (and 24 at 7:1); the config accepts them. For three of them (Ansi, Base16, Base16_256) the theme's own foreground measures 1.00:1 on its ground, so nothing can be repaired | any host whose operator picks one | Some tokens stay below the floor | Pick a theme the survey lists as clean or fully repaired, or check `unrepaired` |
 | The floor pass does not measure named colors, `hsl()` and other color functions, `var()` and `!important` values; it lists them in `skipped()` | `css::apply_floor` on CSS not generated by `syntect` | Such a color is not repaired, and the "re-run the pass" proof covers it only if the host also asserts `skipped()` is empty | Use hex or `rgb()`/`rgba()` colors in CSS that goes through the pass |
-| The pass reads `background-color` only, not the `background` shorthand or an inherited ground | `css::apply_floor` | A rule can be judged against the wrong ground, either way | Write `background-color` explicitly |
+| The pass reads a rule's own ground only, not one inherited from an enclosing element or painted by another rule | `css::apply_floor` | A rule can be judged against the wrong ground, either way | Set `background-color` in the same rule as `color` |
 | Only `color` is measured; non-text contrast (borders, outlines, focus indicators) is not | `css::apply_floor` | A 3:1 failure on a user interface component is not found (SC 1.4.11) | Measure those pairs with `urn:a11y:contrast` |
 | The README and rustdoc have not been checked by any accessibility tool or person | documentation | Unknown | Report what you meet (below) |
 
@@ -265,6 +281,7 @@ after a reported barrier is fixed, and before any conformance claim.
 | 2026-08-15 | The ungated presentation view; person facts stay behind the capability | PR #2 |
 | 2026-08-23 | The endpoints take their config home, so the tests own the files they read | PR #4 |
 | 2026-10-15 | This file | PR #16 |
+| 2026-11-02 | The pass reads the `background` shorthand and judges a ground painted with no color; the survey totals are pinned by a test (ledger #1652) | this change's pull request |
 
 ## References
 

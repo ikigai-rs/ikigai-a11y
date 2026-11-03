@@ -193,6 +193,40 @@ mod tests {
         assert_eq!(foreground.to_css(), "#c0c5ce");
     }
 
+    /// The numbers ACCESSIBILITY.md states (ledger #1652, points 1 and 2), so a
+    /// theme-data update or a change to the pass cannot leave them behind: how many
+    /// embedded themes clear each floor, and what the default dark theme keeps.
+    #[test]
+    fn the_survey_numbers_are_the_ones_the_accessibility_file_states() {
+        for (floor, clean, repaired, incomplete) in [(4.5, 5, 4, 23), (7.0, 0, 8, 24)] {
+            let passes: Vec<FloorPass> = ALL.iter().map(|t| theme_css(*t, "hl-", floor)).collect();
+            let unaided = passes
+                .iter()
+                .filter(|p| p.lifted.is_empty() && p.clears_floor())
+                .count();
+            let cleared = passes.iter().filter(|p| p.clears_floor()).count();
+            assert_eq!(
+                (unaided, cleared - unaided, ALL.len() - cleared),
+                (clean, repaired, incomplete),
+                "at {floor}:1 (clean, repaired, incomplete)"
+            );
+        }
+
+        let pass = theme_css(EmbeddedThemeName::Base16OceanDark, "hl-", 4.5);
+        let left: Vec<(&str, String)> = pass
+            .unrepaired
+            .iter()
+            .map(|f| (f.selector.as_str(), format!("{:.2}", f.ratio)))
+            .collect();
+        assert_eq!(
+            left,
+            [
+                (".hl-meta.hl-separator", "4.01".to_string()),
+                (".hl-invalid.hl-illegal", "3.23".to_string()),
+            ]
+        );
+    }
+
     /// The generalization claim, checked on the exact case that made
     /// ikigai-browse hand-write DARK_PARAMETER: the pass lifts `.hl-variable`'s
     /// red to `#c0c5ce` — the same color, from the theme, without the constant.

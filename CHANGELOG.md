@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The floor pass reads the `background` shorthand (ledger #1652, point 4): its color is the rule's
+  ground, and whichever of `background` and `background-color` applies decides it, so
+  `background: #eeeeee; color: #ffffff` is no longer judged on the page ground. A shorthand with
+  an image, a gradient or a second layer has no one color to measure and is listed by `skipped()`,
+  whose `Skip::property` can now be `background`.
+- A rule that paints a ground and sets no color is judged with the theme's foreground, and listed
+  in `unrepaired` when that fails. Before, nothing measured it, so `clears_floor()` was true for
+  SolarizedDark while its `.hl-invalid` text sat at 3.16:1. A `clears_floor()` that was true can be
+  false now; the two default themes are unaffected, and no rule is rewritten differently.
+
 ## 0.5.0
 
 A minor, not a patch: an `a11y.toml` whose `contrast.min` is below 4.5 (or `contrast.min_large`
