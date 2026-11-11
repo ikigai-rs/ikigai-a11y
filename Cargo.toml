@@ -21,6 +21,8 @@ serde = { version = "1", features = ["derive"] }
 # Pure-Rust, wasm-clean: the config half compiles to wasm32-unknown-unknown.
 toml = "0.8"
 serde_json = "1"
+# CSS Syntax tokenization with source offsets; no optional lookup-table macros.
+cssparser = { version = "0.38", default-features = false }
 
 # The `themes` face: mapping a configured theme NAME to a two-face theme, and
 # generating that theme's CSS with the contrast floor already applied. Optional

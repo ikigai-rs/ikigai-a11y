@@ -55,7 +55,7 @@ These are the behaviors a host can rely on. Each is pinned by a test named under
   `background-color` or the color of a single-layer `background` shorthand, and the theme's ground
   otherwise. When a rule declares `color` or its ground more than once,
   the pass reads the one CSS applies: the last `!important` declaration if there is one, otherwise
-  the last. Property names are ASCII case-insensitive; comments between declaration tokens
+  the last. Property names are decoded as CSS identifiers and are ASCII case-insensitive; comments between declaration tokens
   and delimiters inside strings or functions do not hide declarations. It reaches rules nested in `@media` blocks, leaves
   every other byte unchanged, and is idempotent. A rule it cannot repair (because the foreground
   would not clear the floor on that ground either) is left as the theme wrote it and listed in
@@ -151,7 +151,7 @@ with a failing check. The theme survey is an example run by hand.
 | Check | Version | What it covers | What it does not cover |
 |---|---|---|---|
 | `src/color.rs` tests (11) | `cargo test` | The scale's anchors (21:1, 1:1), symmetry, known pairs (1.03:1, 7.63:1, 3.23:1), adjacent grays (#777 fails 4.5; #767676 passes), every hex form and a doubled `#` refused, CSS Color 4 `rgb()`/`rgba()` vectors (comma and space forms, percentages, `/` alpha, `none`, clamping) and the malformed forms refused, refusal of names and other functions, an error that names the accepted forms, alpha compositing | Non-sRGB color spaces; the 0.04045 threshold is not tested separately (no 8-bit value lies between the two) |
-| `src/css.rs` tests (26) | `cargo test` | Lifting below the floor and leaving the rest byte-identical, `background-color` not mistaken for `color`, a rule's own ground from `background-color` or the `background` shorthand, a ground painted with no color, `@media` nesting, comments before properties and inside `!important`, case-insensitive properties, quoted delimiters, compound selectors, unreadable values left alone and listed by `skipped()`, unrepairable themes and rules reported, idempotence, translucent colors, an `rgba()` color and an `rgb()` ground measured like their hex spellings | Non-`color` properties, inherited grounds, large text (the first and last are pinned as limits) |
+| `src/css.rs` tests (30) | `cargo test` | Lifting below the floor and leaving the rest byte-identical, `background-color` not mistaken for `color`, a rule's own ground from `background-color` or the `background` shorthand, a ground painted with no color, `@media` nesting, comments before properties and inside `!important`, case-insensitive and escaped properties, quoted and escaped delimiters, URL tokens, deeply nested rules, compound selectors, unreadable values left alone and listed by `skipped()`, unrepairable themes and rules reported, idempotence, translucent colors, an `rgba()` color and an `rgb()` ground measured like their hex spellings | Non-`color` properties, inherited grounds, large text (the first and last are pinned as limits) |
 | `src/themes.rs` tests (5, feature `themes`) | `two-face` 0.5, `syntect` 5.3 (caret pins) | The theme table matches `two-face`; both name spellings resolve; the two default themes' ground and foreground; the pass reaches the rule ikigai-browse once patched by hand, idempotently; the survey's totals at 4.5 and 7.0 and the default dark theme's two leftovers | The rules of any theme beyond the two defaults (the survey below lists all 32, by hand) |
 | `src/config.rs` and `src/load.rs` tests (26) | `cargo test` | Key-wise merge (a shared floor survives an override), unknown keys, themes, out-of-range numbers and floors below WCAG AA refused, validation errors naming the layer path, unstated reduced motion, the three faces, and that the presentation view can never carry a person fact | Whether any host honors the settings |
 | `src/endpoints.rs` tests (26) and `tests/conformance.rs` (2) | `ikigai-conformance` 0.8 | `urn:a11y:contrast` (ratio, verdict, no capability, refusals including a `min` outside 1 to 21, a failing ratio never shown at the floor, invalid UTF-8 arguments and undeclared media types refused), the gated and ungated views, golden threads; the module recipe as one test | Everything rendered by a host |
@@ -177,6 +177,15 @@ tests respectively, 2 conformance tests and 2 doctests each. Clippy (all targets
 and the wasm library clippy check passed. The theme surveys were unchanged: at 4.5:1,
 5 unaided, 4 repaired and 23 incomplete; at 7:1, 0, 8 and 24. These are automated code
 checks, not browser or assistive-technology evidence.
+
+Also on 2026-11-11, the floor pass switched its scanner to `cssparser` 0.38.0,
+using source byte offsets rather than serializing tokens. The 26 existing scanner tests
+passed unchanged, with four more tests for escaped identifiers and important flags,
+URL and escaped delimiters, UTF-8 offsets, source order and 100 nested media blocks.
+Default and all-feature runs passed 95 and 100 unit tests, 2 conformance tests and
+2 doctests each. Default and all-feature clippy, wasm library clippy and the wasm
+library build passed. The theme surveys remained 5/4/23 at 4.5:1 and 0/8/24 at 7:1
+(unaided/repaired/incomplete). No browser or assistive technology was tested.
 
 No accessibility checker (axe or similar) has been run on the README or the rustdoc.
 
