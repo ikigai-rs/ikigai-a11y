@@ -449,6 +449,72 @@ mod tests {
         )
     }
 
+    #[test]
+    fn property_names_are_ascii_case_insensitive() {
+        let (ground, foreground) = dark();
+        let css = ".x { COLOR: #bf616a; }";
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert_eq!(pass.css, ".x { COLOR: #c0c5ce; }");
+        assert_eq!(pass.lifted.len(), 1);
+        assert_eq!(
+            apply_floor(&pass.css, ground, foreground, 4.5).css,
+            pass.css
+        );
+
+        for property in ["BACKGROUND", "Background-Color"] {
+            let css = format!(".x {{ {property}: #eeeeee; color: #ffffff; }}");
+            let pass = apply_floor(&css, ground, foreground, 4.5);
+            assert_eq!(pass.unrepaired.len(), 1, "{pass:?}");
+            assert!(!pass.clears_floor());
+        }
+    }
+
+    #[test]
+    fn comments_before_properties_do_not_hide_declarations() {
+        let (ground, foreground) = dark();
+        for css in [
+            ".x { /* note */ color: #bf616a; }",
+            ".x { color /* note */ : #bf616a; }",
+            ".x { /* misleading ; color: #ffffff; */ color: #bf616a; }",
+        ] {
+            let pass = apply_floor(css, ground, foreground, 4.5);
+            assert_eq!(pass.lifted.len(), 1, "{css}: {pass:?}");
+            assert_eq!(pass.css, css.replace("#bf616a", "#c0c5ce"));
+            assert_eq!(
+                apply_floor(&pass.css, ground, foreground, 4.5).css,
+                pass.css
+            );
+        }
+        let css = ".x { /* note */ background: #eeeeee; color: #ffffff; }";
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert_eq!(pass.unrepaired.len(), 1, "{pass:?}");
+        assert!(!pass.clears_floor());
+    }
+
+    #[test]
+    fn strings_and_function_contents_are_not_declaration_structure() {
+        let (ground, foreground) = dark();
+        for css in [
+            r#".x { content: "}"; color: #bf616a; }"#,
+            r#".x { content: "; color: #ffffff;"; color: #bf616a; }"#,
+            r#".x { content: "/*"; color: #bf616a; }"#,
+            r#".x[data-label="{"] { color: #bf616a; }"#,
+            ".x { --data: fn(; color: #ffffff;); color: #bf616a; }",
+        ] {
+            let pass = apply_floor(css, ground, foreground, 4.5);
+            assert_eq!(pass.lifted.len(), 1, "{css}: {pass:?}");
+            assert_eq!(pass.css, css.replace("#bf616a", "#c0c5ce"));
+            assert_eq!(
+                apply_floor(&pass.css, ground, foreground, 4.5).css,
+                pass.css
+            );
+        }
+        let css = r#".x { color: #bf616a; content: "; color: #ffffff;"; }"#;
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert_eq!(pass.lifted.len(), 1, "{pass:?}");
+        assert_eq!(pass.css, css.replace("#bf616a", "#c0c5ce"));
+    }
+
     /// The pass's contract, both halves at once: a failing rule is lifted to the
     /// theme's own foreground, and a passing rule is not touched.
     #[test]

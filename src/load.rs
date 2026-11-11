@@ -267,6 +267,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn invalid_layer_values_name_the_file_and_field() {
+        for (text, field) in [
+            ("[theme]\ndark = \"Unknown\"\n", "theme.dark"),
+            ("[contrast]\nmin = 4.499\n", "contrast.min"),
+            ("[text]\nscale = nan\n", "text.scale"),
+        ] {
+            let home = Scratch::new("invalid-layer");
+            home.write(STEM, text);
+            // A valid override must not hide a broken lower layer.
+            home.write(
+                "app.a11y.toml",
+                "[theme]\ndark = \"Nord\"\n[contrast]\nmin = 7.0\n[text]\nscale = 1.0\n",
+            );
+            let error = complete_in(home.path(), Some("app")).unwrap_err();
+            let message = error.to_string();
+            assert!(
+                message.contains(&home.path().join(STEM).display().to_string()),
+                "{message}"
+            );
+            assert!(message.contains(field), "{message}");
+        }
+    }
+
     /// The ungated read reaches the rendering half of the very same files and
     /// stops there. This is the whole point of the split: `presentation_in` is
     /// what a consumer deriving an artifact calls, and no capability is checked
