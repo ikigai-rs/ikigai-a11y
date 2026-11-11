@@ -23,6 +23,7 @@
 //! the `themes` face (feature `themes`).
 
 use crate::color::{ratio, Rgba};
+use cssparser::{Delimiter, Parser, Token};
 
 /// One rule the pass changed.
 #[derive(Clone, PartialEq, Debug)]
@@ -243,93 +244,65 @@ struct Block {
 /// mode being a clean run that changes nothing.
 fn declaration_blocks(css: &str) -> Vec<Block> {
     let mut blocks = Vec::new();
-    // Start of the current selector run: after the last structural brace.
-    let mut selector_start = 0usize;
-    // Stack of (open brace index, selector range, whether a nested block opened).
-    let mut stack: Vec<(usize, std::ops::Range<usize>, bool)> = Vec::new();
-    let mut depth = 0usize;
-    for (i, byte) in syntax(css) {
-        match byte {
-            b'(' | b'[' => depth += 1,
-            b')' | b']' => depth = depth.saturating_sub(1),
-            b'{' if depth == 0 => {
-                if let Some(top) = stack.last_mut() {
-                    top.2 = true;
-                }
-                let start = skip_trivia(css, selector_start);
-                stack.push((i, start..i, false));
-                selector_start = i + 1;
+    let mut pending = child_blocks(css, 0);
+    while let Some(block) = pending.pop() {
+        let children = child_blocks(&css[block.body.clone()], block.body.start);
+        if children.is_empty() {
+            blocks.push(block);
+        } else {
+            pending.extend(children);
+        }
+    }
+    blocks.sort_by_key(|block| block.body.start);
+    blocks
+}
+
+// cssparser owns CSS tokenization and block matching. Its positions are UTF-8
+// byte offsets into the input, including inside parse_nested_block. Add the
+// scope's base offset, and never serialize tokens back to CSS: repairs must
+// preserve source bytes. Walk scopes with a work list rather than recursive
+// parser calls so deeply nested stylesheets do not hit its nesting limit.
+fn child_blocks(css: &str, base: usize) -> Vec<Block> {
+    let mut parser = Parser::new(css);
+    let mut blocks = Vec::new();
+    let mut selector_start = None;
+    loop {
+        let start = parser.position().byte_index();
+        let Ok(token) = parser.next_including_whitespace_and_comments() else {
+            break;
+        };
+        match token {
+            Token::WhiteSpace(_) | Token::Comment(_) => continue,
+            Token::CurlyBracketBlock => {
+                let selector = base + selector_start.unwrap_or(start)..base + start;
+                let body_start = parser.position().byte_index();
+                let body_end = consume_block(&mut parser);
+                blocks.push(Block {
+                    selector,
+                    body: base + body_start..base + body_end,
+                });
+                selector_start = None;
             }
-            b'}' if depth == 0 => {
-                if let Some((open, selector, nested)) = stack.pop() {
-                    if !nested {
-                        blocks.push(Block {
-                            selector,
-                            body: open + 1..i,
-                        });
-                    }
-                }
-                selector_start = i + 1;
+            Token::Function(_) | Token::ParenthesisBlock | Token::SquareBracketBlock => {
+                selector_start.get_or_insert(start);
+                consume_block(&mut parser);
             }
-            _ => {}
+            _ => {
+                selector_start.get_or_insert(start);
+            }
         }
     }
     blocks
 }
 
-/// Bytes outside CSS comments, quoted strings, and escapes. Only these bytes
-/// can delimit blocks or declarations. Offsets always refer to the original
-/// input so repairs preserve every byte outside the measured value.
-fn syntax(text: &str) -> impl Iterator<Item = (usize, u8)> + '_ {
-    let bytes = text.as_bytes();
-    let mut i = 0usize;
-    std::iter::from_fn(move || {
-        while i < bytes.len() {
-            let at = i;
-            let byte = bytes[i];
-            i += 1;
-            match byte {
-                b'/' if bytes.get(i) == Some(&b'*') => {
-                    i = comment_end(text, at);
-                }
-                b'\\' => i = (i + 1).min(bytes.len()),
-                b'\'' | b'"' => {
-                    while i < bytes.len() {
-                        let next = bytes[i];
-                        i += 1;
-                        if next == b'\\' {
-                            i = (i + 1).min(bytes.len());
-                        } else if next == byte {
-                            break;
-                        }
-                    }
-                }
-                _ => return Some((at, byte)),
-            }
-        }
-        None
-    })
-}
-
-fn comment_end(text: &str, start: usize) -> usize {
-    text[start + 2..]
-        .find("*/")
-        .map_or(text.len(), |off| start + 2 + off + 2)
-}
-
-/// Skip whitespace and comments between CSS tokens without changing the input.
-fn skip_trivia(text: &str, mut i: usize) -> usize {
-    let bytes = text.as_bytes();
-    loop {
-        while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
-            i += 1;
-        }
-        if bytes.get(i..i + 2) == Some(b"/*") {
-            i = comment_end(text, i);
-        } else {
-            return i;
-        }
-    }
+// Called only just after an opening token, at the first parser nesting level.
+// Reading to exhaustion lets cssparser skip any inner blocks atomically.
+fn consume_block(parser: &mut Parser<'_>) -> usize {
+    let result: Result<usize, cssparser::ParseError<()>> = parser.parse_nested_block(|contents| {
+        while contents.next_including_whitespace_and_comments().is_ok() {}
+        Ok(contents.position().byte_index())
+    });
+    result.expect("consuming a block at the first nesting level cannot fail")
 }
 
 /// One declaration within a block body: which property, and its value's span.
@@ -361,58 +334,39 @@ const GROUND: &[&str] = &["background-color", "background"];
 fn declaration(body: &str, properties: &[&'static str]) -> Option<Decl> {
     let mut last = None;
     let mut last_important = None;
-    let mut start = 0usize;
-    let mut depth = 0usize;
-    let mut ends = Vec::new();
-    for (i, byte) in syntax(body) {
-        match byte {
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
-            b';' if depth == 0 => ends.push(i),
-            _ => {}
+    let mut parser = Parser::new(body);
+    while !parser.is_exhausted() {
+        let result: Result<Decl, cssparser::ParseError<()>> =
+            parser.parse_until_before(Delimiter::Semicolon, |piece| {
+                let name = piece.expect_ident_cloned()?;
+                let property = properties
+                    .iter()
+                    .copied()
+                    .find(|p| p.eq_ignore_ascii_case(&name))
+                    .ok_or_else(|| cssparser::ParseError::custom(()))?;
+                piece.expect_colon()?;
+                let start = piece.position().byte_index();
+                while piece.next_including_whitespace_and_comments().is_ok() {}
+                let end = piece.position().byte_index();
+                let raw = &body[start..end];
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    return Err(cssparser::ParseError::custom(()));
+                }
+                let start = start + raw.len() - raw.trim_start().len();
+                Ok(Decl {
+                    property,
+                    value: start..start + trimmed.len(),
+                })
+            });
+        if let Ok(decl) = result {
+            if is_important(&body[decl.value.clone()]) {
+                last_important = Some(decl);
+            } else {
+                last = Some(decl);
+            }
         }
-    }
-    ends.push(body.len());
-    for end in ends {
-        let piece_start = start;
-        start = end + 1;
-        let piece = &body[piece_start..end];
-        let Some((colon, _)) = syntax(piece).find(|(_, byte)| *byte == b':') else {
-            continue;
-        };
-        // Comments may precede the name or separate it from the colon, but
-        // cannot join two identifier tokens (col/**/or is not color).
-        let name_start = skip_trivia(piece, 0);
-        let name_end = piece[name_start..colon]
-            .find(|c: char| c.is_ascii_whitespace() || c == '/')
-            .map_or(colon, |off| name_start + off);
-        if skip_trivia(piece, name_end) != colon {
-            continue;
-        }
-        let name = &piece[name_start..name_end];
-        let Some(property) = properties
-            .iter()
-            .copied()
-            .find(|p| p.eq_ignore_ascii_case(name))
-        else {
-            continue;
-        };
-        let raw = &piece[colon + 1..];
-        let leading = raw.len() - raw.trim_start().len();
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let value_start = piece_start + colon + 1 + leading;
-        let decl = Decl {
-            property,
-            value: value_start..value_start + trimmed.len(),
-        };
-        if is_important(trimmed) {
-            last_important = Some(decl);
-        } else {
-            last = Some(decl);
-        }
+        let _ = parser.expect_semicolon();
     }
     last_important.or(last)
 }
@@ -445,24 +399,35 @@ fn shorthand_color(value: &str) -> Result<Option<Rgba>, ()> {
     Ok(color)
 }
 
-/// A shorthand's parts, split at spaces and `/` outside parentheses.
+/// A shorthand's parts, split at whitespace and `/` between CSS tokens.
 fn shorthand_parts(value: &str) -> Vec<&str> {
     let mut parts = Vec::new();
-    let mut depth = 0usize;
-    let mut start = 0usize;
-    for (i, c) in value.char_indices() {
-        match c {
-            '(' => depth += 1,
-            ')' => depth = depth.saturating_sub(1),
-            '/' | ' ' | '\t' | '\n' | '\r' | '\x0c' if depth == 0 => {
-                parts.push(&value[start..i]);
-                start = i + 1;
+    let mut parser = Parser::new(value);
+    let mut start = 0;
+    loop {
+        let at = parser.position().byte_index();
+        let Ok(token) = parser.next_including_whitespace_and_comments() else {
+            break;
+        };
+        match token {
+            Token::WhiteSpace(_) | Token::Delim('/') => {
+                if start < at {
+                    parts.push(&value[start..at]);
+                }
+                start = parser.position().byte_index();
+            }
+            Token::Function(_)
+            | Token::ParenthesisBlock
+            | Token::SquareBracketBlock
+            | Token::CurlyBracketBlock => {
+                consume_block(&mut parser);
             }
             _ => {}
         }
     }
-    parts.push(&value[start..]);
-    parts.retain(|part| !part.is_empty());
+    if start < value.len() {
+        parts.push(&value[start..]);
+    }
     parts
 }
 
@@ -501,15 +466,22 @@ fn paints_nothing(part: &str) -> bool {
 /// Whether a declaration's value carries the `!important` flag (`!` and the
 /// ASCII case-insensitive keyword, whitespace allowed between them).
 fn is_important(value: &str) -> bool {
-    let Some((bang, _)) = syntax(value).filter(|(_, byte)| *byte == b'!').last() else {
-        return false;
-    };
-    let keyword = skip_trivia(value, bang + 1);
-    let end = keyword + "important".len();
-    value
-        .get(keyword..end)
-        .is_some_and(|word| word.eq_ignore_ascii_case("important"))
-        && skip_trivia(value, end) == value.len()
+    let mut parser = Parser::new(value);
+    loop {
+        if parser
+            .try_parse(|input| {
+                cssparser::parse_important(input)?;
+                input.expect_exhausted()
+            })
+            .is_ok()
+        {
+            return true;
+        }
+        if parser.next().is_err() {
+            break;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -524,6 +496,75 @@ mod tests {
             Rgba::parse(DARK_GROUND).unwrap(),
             Rgba::parse(DARK_FOREGROUND).unwrap(),
         )
+    }
+
+    #[test]
+    fn tokenizer_boundaries_preserve_selectors_values_and_source_order() {
+        let (ground, foreground) = dark();
+        for (css, selectors) in [
+            (r".a\{b { color: #bf616a; }", vec![r".a\{b"]),
+            (
+                r".a { --data: url(https://example.test/}); color: #bf616a; }",
+                vec![".a"],
+            ),
+            (
+                r#"@media (x) { .é[data-x="}"] { content: "\"}"; color: #bf616a; } }
+.b { color: #bf616a; }"#,
+                vec![r#".é[data-x="}"]"#, ".b"],
+            ),
+        ] {
+            let pass = apply_floor(css, ground, foreground, 4.5);
+            assert_eq!(pass.css, css.replace("#bf616a", "#c0c5ce"));
+            assert_eq!(
+                pass.lifted
+                    .iter()
+                    .map(|lift| lift.selector.as_str())
+                    .collect::<Vec<_>>(),
+                selectors
+            );
+            assert_eq!(
+                apply_floor(&pass.css, ground, foreground, 4.5).css,
+                pass.css
+            );
+        }
+    }
+
+    #[test]
+    fn deeply_nested_rules_do_not_hit_the_parser_nesting_limit() {
+        let (ground, foreground) = dark();
+        let css = format!(
+            "{}.é {{ color: #bf616a; }}{}",
+            "@media (x) {".repeat(100),
+            "}".repeat(100)
+        );
+        let pass = apply_floor(&css, ground, foreground, 4.5);
+        assert_eq!(pass.lifted.len(), 1);
+        assert_eq!(pass.lifted[0].selector, ".é");
+        assert_eq!(pass.css, css.replace("#bf616a", "#c0c5ce"));
+    }
+
+    #[test]
+    fn escaped_important_is_recognized_but_separate_identifiers_are_not_joined() {
+        let (ground, foreground) = dark();
+        let css = r".x { color: #bf616a !\69mportant; color: #c0c5ce; }";
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert_eq!(pass.css, css);
+        assert_eq!(pass.skipped()[0].value, r"#bf616a !\69mportant");
+        let css = ".x { col/**/or: #bf616a; color: #c0c5ce; }";
+        assert_eq!(apply_floor(css, ground, foreground, 4.5).css, css);
+    }
+
+    #[test]
+    fn escaped_property_names_keep_original_bytes_outside_the_value() {
+        let (ground, foreground) = dark();
+        let css = r"/* café */ .é { c\6flor: #bf616a; }";
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert_eq!(pass.lifted.len(), 1);
+        assert_eq!(pass.css, css.replace("#bf616a", "#c0c5ce"));
+        assert_eq!(
+            apply_floor(&pass.css, ground, foreground, 4.5).css,
+            pass.css
+        );
     }
 
     #[test]
