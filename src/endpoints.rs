@@ -251,10 +251,11 @@ impl A11yHandle {
 /// prose would notice much later than the caller who asked wrong.
 fn face(inv: &Invocation<'_>) -> Result<&'static str> {
     match inv.inline_str("as").map(str::trim) {
-        Err(_) | Ok("") => Ok(TEXT_PLAIN),
+        Err(Error::MissingArgument(_)) | Ok("") => Ok(TEXT_PLAIN),
+        Err(error) => Err(error),
         Ok(t) if t == JSON => Ok(JSON),
         Ok(t) if t == TURTLE => Ok(TURTLE),
-        Ok(t) if t.starts_with("text/plain") => Ok(TEXT_PLAIN),
+        Ok(TEXT_PLAIN) => Ok(TEXT_PLAIN),
         Ok(other) => Err(Error::InvalidArgument {
             name: "as".to_string(),
             detail: format!("expected one of {TEXT_PLAIN}|{JSON}|{TURTLE}, got {other:?}"),
@@ -442,7 +443,8 @@ fn contrast_impl(inv: &Invocation<'_>) -> Result<Representation> {
     let from = read_color("from")?;
     let on = read_color("on")?;
     let min = match inv.inline_str("min").map(str::trim) {
-        Err(_) | Ok("") => crate::config::DEFAULT_MIN,
+        Err(Error::MissingArgument(_)) | Ok("") => crate::config::DEFAULT_MIN,
+        Err(error) => return Err(error),
         Ok(raw) => match raw.parse::<f64>() {
             // NaN fails both comparisons and is refused with the rest.
             Ok(min) if (1.0..=21.0).contains(&min) => min,
@@ -796,6 +798,29 @@ mod tests {
             invoke(&contrast(), request, &cap),
             Err(Error::InvalidArgument { .. })
         ));
+    }
+
+    #[test]
+    fn invalid_utf8_optional_arguments_are_refused() {
+        let cap = Capability::root();
+        for name in ["min", "as"] {
+            let request =
+                contrast_request("#777", "#fff").with_arg(name, ArgRef::Inline(vec![0xff]));
+            assert!(
+                invoke(&contrast(), request, &cap).is_err(),
+                "{name} must not default"
+            );
+        }
+    }
+
+    #[test]
+    fn a_face_must_match_a_declared_media_type() {
+        let cap = Capability::root();
+        let request = contrast_request("#777", "#fff")
+            .with_arg("as", ArgRef::Inline(b"text/plainbogus".to_vec()));
+        assert!(
+            matches!(invoke(&contrast(), request, &cap), Err(Error::InvalidArgument { name, .. }) if name == "as")
+        );
     }
 
     /// Declared = enforced, in both directions: the description names the cap and

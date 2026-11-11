@@ -151,11 +151,11 @@ fn floor_meaning(field: &str) -> Option<&'static str> {
 // be the NaN that got it rejected.
 #[derive(Clone, PartialEq, Debug)]
 pub enum ConfigError {
-    /// The TOML did not parse, or carried a key the schema does not define.
+    /// A layer failed parsing or validation; includes its path when supplied.
     Parse {
         /// The file it came from, when it came from one.
         path: Option<PathBuf>,
-        /// The parser's own message.
+        /// The parser's or validator's message.
         message: String,
     },
     /// A theme name that no embedded theme answers to.
@@ -384,13 +384,21 @@ pub struct TextPatch {
 
 impl Patch {
     /// Parse one layer from TOML text. `path` is carried only for the error
-    /// message; parsing does not read it.
+    /// message for both syntax and validation failures; parsing does not read it.
+    /// With no path, validation returns the typed `UnknownTheme` or `OutOfRange`
+    /// error. With a path, `Parse` carries that file and the validation message.
     pub fn parse(toml_text: &str, path: Option<PathBuf>) -> Result<Self, ConfigError> {
         let patch: Patch = toml::from_str(toml_text).map_err(|e| ConfigError::Parse {
             path: path.clone(),
             message: e.message().to_string(),
         })?;
-        patch.validate()?;
+        patch.validate().map_err(|error| match path {
+            Some(path) => ConfigError::Parse {
+                path: Some(path),
+                message: error.to_string(),
+            },
+            None => error,
+        })?;
         Ok(patch)
     }
 

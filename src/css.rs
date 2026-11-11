@@ -242,33 +242,25 @@ struct Block {
 /// only understood top-level rules would silently do nothing there — the failure
 /// mode being a clean run that changes nothing.
 fn declaration_blocks(css: &str) -> Vec<Block> {
-    let bytes = css.as_bytes();
     let mut blocks = Vec::new();
-    // Start of the current selector run: after the last brace or comment.
+    // Start of the current selector run: after the last structural brace.
     let mut selector_start = 0usize;
     // Stack of (open brace index, selector range, whether a nested block opened).
     let mut stack: Vec<(usize, std::ops::Range<usize>, bool)> = Vec::new();
-    let mut i = 0usize;
-    while i < bytes.len() {
-        // Comments are not structure: syntect writes a banner one, and a stray
-        // brace inside a comment must not open a block.
-        if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
-            let end = css[i + 2..]
-                .find("*/")
-                .map_or(bytes.len(), |off| i + 2 + off + 2);
-            i = end;
-            selector_start = i;
-            continue;
-        }
-        match bytes[i] {
-            b'{' => {
+    let mut depth = 0usize;
+    for (i, byte) in syntax(css) {
+        match byte {
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth = depth.saturating_sub(1),
+            b'{' if depth == 0 => {
                 if let Some(top) = stack.last_mut() {
-                    top.2 = true; // the enclosing block has a nested one
+                    top.2 = true;
                 }
-                stack.push((i, selector_start..i, false));
+                let start = skip_trivia(css, selector_start);
+                stack.push((i, start..i, false));
                 selector_start = i + 1;
             }
-            b'}' => {
+            b'}' if depth == 0 => {
                 if let Some((open, selector, nested)) = stack.pop() {
                     if !nested {
                         blocks.push(Block {
@@ -281,9 +273,63 @@ fn declaration_blocks(css: &str) -> Vec<Block> {
             }
             _ => {}
         }
-        i += 1;
     }
     blocks
+}
+
+/// Bytes outside CSS comments, quoted strings, and escapes. Only these bytes
+/// can delimit blocks or declarations. Offsets always refer to the original
+/// input so repairs preserve every byte outside the measured value.
+fn syntax(text: &str) -> impl Iterator<Item = (usize, u8)> + '_ {
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    std::iter::from_fn(move || {
+        while i < bytes.len() {
+            let at = i;
+            let byte = bytes[i];
+            i += 1;
+            match byte {
+                b'/' if bytes.get(i) == Some(&b'*') => {
+                    i = comment_end(text, at);
+                }
+                b'\\' => i = (i + 1).min(bytes.len()),
+                b'\'' | b'"' => {
+                    while i < bytes.len() {
+                        let next = bytes[i];
+                        i += 1;
+                        if next == b'\\' {
+                            i = (i + 1).min(bytes.len());
+                        } else if next == byte {
+                            break;
+                        }
+                    }
+                }
+                _ => return Some((at, byte)),
+            }
+        }
+        None
+    })
+}
+
+fn comment_end(text: &str, start: usize) -> usize {
+    text[start + 2..]
+        .find("*/")
+        .map_or(text.len(), |off| start + 2 + off + 2)
+}
+
+/// Skip whitespace and comments between CSS tokens without changing the input.
+fn skip_trivia(text: &str, mut i: usize) -> usize {
+    let bytes = text.as_bytes();
+    loop {
+        while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+            i += 1;
+        }
+        if bytes.get(i..i + 2) == Some(b"/*") {
+            i = comment_end(text, i);
+        } else {
+            return i;
+        }
+    }
 }
 
 /// One declaration within a block body: which property, and its value's span.
@@ -298,7 +344,8 @@ const GROUND: &[&str] = &["background-color", "background"];
 
 /// Find the value span of the declaration CSS applies among `properties` in a
 /// declaration block body, matching the property name EXACTLY — `color` must not
-/// match `background-color`, which is the whole difficulty of doing this with
+/// match `background-color`. Names are ASCII case-insensitive, as in CSS, and
+/// comments between tokens do not hide declarations. This cannot use simple
 /// string search.
 ///
 /// The declaration that applies is the cascade's within one block (ledger
@@ -314,15 +361,40 @@ const GROUND: &[&str] = &["background-color", "background"];
 fn declaration(body: &str, properties: &[&'static str]) -> Option<Decl> {
     let mut last = None;
     let mut last_important = None;
-    let mut offset = 0usize;
-    for piece in body.split(';') {
-        let start = offset;
-        offset += piece.len() + 1; // the ';' the split consumed
-        let Some(colon) = piece.find(':') else {
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    let mut ends = Vec::new();
+    for (i, byte) in syntax(body) {
+        match byte {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            b';' if depth == 0 => ends.push(i),
+            _ => {}
+        }
+    }
+    ends.push(body.len());
+    for end in ends {
+        let piece_start = start;
+        start = end + 1;
+        let piece = &body[piece_start..end];
+        let Some((colon, _)) = syntax(piece).find(|(_, byte)| *byte == b':') else {
             continue;
         };
-        let name = piece[..colon].trim();
-        let Some(property) = properties.iter().copied().find(|p| *p == name) else {
+        // Comments may precede the name or separate it from the colon, but
+        // cannot join two identifier tokens (col/**/or is not color).
+        let name_start = skip_trivia(piece, 0);
+        let name_end = piece[name_start..colon]
+            .find(|c: char| c.is_ascii_whitespace() || c == '/')
+            .map_or(colon, |off| name_start + off);
+        if skip_trivia(piece, name_end) != colon {
+            continue;
+        }
+        let name = &piece[name_start..name_end];
+        let Some(property) = properties
+            .iter()
+            .copied()
+            .find(|p| p.eq_ignore_ascii_case(name))
+        else {
             continue;
         };
         let raw = &piece[colon + 1..];
@@ -331,7 +403,7 @@ fn declaration(body: &str, properties: &[&'static str]) -> Option<Decl> {
         if trimmed.is_empty() {
             continue;
         }
-        let value_start = start + colon + 1 + leading;
+        let value_start = piece_start + colon + 1 + leading;
         let decl = Decl {
             property,
             value: value_start..value_start + trimmed.len(),
@@ -429,10 +501,15 @@ fn paints_nothing(part: &str) -> bool {
 /// Whether a declaration's value carries the `!important` flag (`!` and the
 /// ASCII case-insensitive keyword, whitespace allowed between them).
 fn is_important(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower
-        .strip_suffix("important")
-        .is_some_and(|rest| rest.trim_end().ends_with('!'))
+    let Some((bang, _)) = syntax(value).filter(|(_, byte)| *byte == b'!').last() else {
+        return false;
+    };
+    let keyword = skip_trivia(value, bang + 1);
+    let end = keyword + "important".len();
+    value
+        .get(keyword..end)
+        .is_some_and(|word| word.eq_ignore_ascii_case("important"))
+        && skip_trivia(value, end) == value.len()
 }
 
 #[cfg(test)]
@@ -447,6 +524,72 @@ mod tests {
             Rgba::parse(DARK_GROUND).unwrap(),
             Rgba::parse(DARK_FOREGROUND).unwrap(),
         )
+    }
+
+    #[test]
+    fn property_names_are_ascii_case_insensitive() {
+        let (ground, foreground) = dark();
+        let css = ".x { COLOR: #bf616a; }";
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert_eq!(pass.css, ".x { COLOR: #c0c5ce; }");
+        assert_eq!(pass.lifted.len(), 1);
+        assert_eq!(
+            apply_floor(&pass.css, ground, foreground, 4.5).css,
+            pass.css
+        );
+
+        for property in ["BACKGROUND", "Background-Color"] {
+            let css = format!(".x {{ {property}: #eeeeee; color: #ffffff; }}");
+            let pass = apply_floor(&css, ground, foreground, 4.5);
+            assert_eq!(pass.unrepaired.len(), 1, "{pass:?}");
+            assert!(!pass.clears_floor());
+        }
+    }
+
+    #[test]
+    fn comments_before_properties_do_not_hide_declarations() {
+        let (ground, foreground) = dark();
+        for css in [
+            ".x { /* note */ color: #bf616a; }",
+            ".x { color /* note */ : #bf616a; }",
+            ".x { /* misleading ; color: #ffffff; */ color: #bf616a; }",
+        ] {
+            let pass = apply_floor(css, ground, foreground, 4.5);
+            assert_eq!(pass.lifted.len(), 1, "{css}: {pass:?}");
+            assert_eq!(pass.css, css.replace("#bf616a", "#c0c5ce"));
+            assert_eq!(
+                apply_floor(&pass.css, ground, foreground, 4.5).css,
+                pass.css
+            );
+        }
+        let css = ".x { /* note */ background: #eeeeee; color: #ffffff; }";
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert_eq!(pass.unrepaired.len(), 1, "{pass:?}");
+        assert!(!pass.clears_floor());
+    }
+
+    #[test]
+    fn strings_and_function_contents_are_not_declaration_structure() {
+        let (ground, foreground) = dark();
+        for css in [
+            r#".x { content: "}"; color: #bf616a; }"#,
+            r#".x { content: "; color: #ffffff;"; color: #bf616a; }"#,
+            r#".x { content: "/*"; color: #bf616a; }"#,
+            r#".x[data-label="{"] { color: #bf616a; }"#,
+            ".x { --data: fn(; color: #ffffff;); color: #bf616a; }",
+        ] {
+            let pass = apply_floor(css, ground, foreground, 4.5);
+            assert_eq!(pass.lifted.len(), 1, "{css}: {pass:?}");
+            assert_eq!(pass.css, css.replace("#bf616a", "#c0c5ce"));
+            assert_eq!(
+                apply_floor(&pass.css, ground, foreground, 4.5).css,
+                pass.css
+            );
+        }
+        let css = r#".x { color: #bf616a; content: "; color: #ffffff;"; }"#;
+        let pass = apply_floor(css, ground, foreground, 4.5);
+        assert_eq!(pass.lifted.len(), 1, "{pass:?}");
+        assert_eq!(pass.css, css.replace("#bf616a", "#c0c5ce"));
     }
 
     /// The pass's contract, both halves at once: a failing rule is lifted to the
@@ -711,6 +854,23 @@ mod tests {
         let skips = apply_floor(css, ground, foreground, 4.5).skipped();
         assert_eq!(skips.len(), 1, "{skips:?}");
         assert_eq!(skips[0].value, "#bf616a !important");
+    }
+
+    #[test]
+    fn comments_in_important_flags_do_not_change_the_cascade() {
+        let (ground, foreground) = dark();
+        for flag in [
+            "!/**/important",
+            "! important /* note */",
+            "!/* ; */IMPORTANT",
+        ] {
+            let css = format!(".x {{ color: #bf616a {flag}; color: #c0c5ce; }}");
+            let pass = apply_floor(&css, ground, foreground, 4.5);
+            assert_eq!(pass.css, css);
+            assert_eq!(pass.skipped().len(), 1, "{flag}: {pass:?}");
+            assert_eq!(pass.skipped()[0].value, format!("#bf616a {flag}"));
+            assert!(!pass.clears_floor());
+        }
     }
 
     /// A `background` shorthand paints the rule's ground exactly as a

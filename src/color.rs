@@ -368,6 +368,21 @@ mod tests {
         assert!((ratio(white, white) - 1.0).abs() < 1e-9);
     }
 
+    #[test]
+    fn adjacent_grays_straddle_the_unrounded_aa_floor() {
+        let white = Rgba::rgb(255, 255, 255);
+        for (hex, expected, passes) in [
+            ("#777", 4.478_089_453_577_214, false),
+            ("#767676", 4.542_224_959_605_253, true),
+        ] {
+            let gray = Rgba::parse(hex).unwrap();
+            let achieved = ratio(gray, white);
+            assert!((achieved - expected).abs() < 1e-12, "{hex}: {achieved}");
+            assert_eq!(achieved >= 4.5, passes);
+            assert_eq!(ratio(white, gray), achieved);
+        }
+    }
+
     /// The pair that motivated this crate: InspiredGitHub's base foreground
     /// `#323232` landing on base16-ocean.dark's ground `#2b303b` when a light
     /// theme's rule escaped into the dark block. 1.03:1 — text on text.

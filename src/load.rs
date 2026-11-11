@@ -259,12 +259,43 @@ mod tests {
         let home = Scratch::new("bad");
         home.write("a11y.toml", "[theme]\ndark = \"Base16OceanDrak\"\n");
         let err = complete_in(home.path(), None).unwrap_err();
-        assert!(matches!(err, ConfigError::UnknownTheme { .. }), "{err:?}");
+        assert!(matches!(err, ConfigError::Parse { .. }), "{err:?}");
+        assert!(err.to_string().contains("theme.dark"), "{err}");
+        assert!(err.to_string().contains("Base16OceanDrak"), "{err}");
+        assert!(
+            err.to_string()
+                .contains(&home.path().join(STEM).display().to_string()),
+            "{err}"
+        );
         assert_eq!(
             A11y::default().theme.dark,
             DEFAULT_DARK,
             "no silent fallback"
         );
+    }
+
+    #[test]
+    fn invalid_layer_values_name_the_file_and_field() {
+        for (text, field) in [
+            ("[theme]\ndark = \"Unknown\"\n", "theme.dark"),
+            ("[contrast]\nmin = 4.499\n", "contrast.min"),
+            ("[text]\nscale = nan\n", "text.scale"),
+        ] {
+            let home = Scratch::new("invalid-layer");
+            home.write(STEM, text);
+            // A valid override must not hide a broken lower layer.
+            home.write(
+                "app.a11y.toml",
+                "[theme]\ndark = \"Nord\"\n[contrast]\nmin = 7.0\n[text]\nscale = 1.0\n",
+            );
+            let error = complete_in(home.path(), Some("app")).unwrap_err();
+            let message = error.to_string();
+            assert!(
+                message.contains(&home.path().join(STEM).display().to_string()),
+                "{message}"
+            );
+            assert!(message.contains(field), "{message}");
+        }
     }
 
     /// The ungated read reaches the rendering half of the very same files and
