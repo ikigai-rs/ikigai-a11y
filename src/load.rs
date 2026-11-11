@@ -259,7 +259,14 @@ mod tests {
         let home = Scratch::new("bad");
         home.write("a11y.toml", "[theme]\ndark = \"Base16OceanDrak\"\n");
         let err = complete_in(home.path(), None).unwrap_err();
-        assert!(matches!(err, ConfigError::UnknownTheme { .. }), "{err:?}");
+        assert!(matches!(err, ConfigError::Parse { .. }), "{err:?}");
+        assert!(err.to_string().contains("theme.dark"), "{err}");
+        assert!(err.to_string().contains("Base16OceanDrak"), "{err}");
+        assert!(
+            err.to_string()
+                .contains(&home.path().join(STEM).display().to_string()),
+            "{err}"
+        );
         assert_eq!(
             A11y::default().theme.dark,
             DEFAULT_DARK,

@@ -20,7 +20,7 @@ Adapted from the [ACCESSIBILITY.md template](https://github.com/mgifford/ACCESSI
 | Private channel | [private vulnerability reporting](https://github.com/ikigai-rs/ikigai-a11y/security/advisories/new), for anything security-sensitive |
 | Target | WCAG 2.2 Level AA, for the parts of a host's output this crate decides, and for this repository's own documentation |
 | Status | Evaluation in progress. No conformance claim. |
-| Last reviewed | 2026-11-02 |
+| Last reviewed | 2026-11-11 |
 | Next review | when the contrast math, the floor pass or the config schema changes, when `two-face` or `syntect` changes version, or when WCAG changes its contrast definitions |
 
 ## Commitment
@@ -55,7 +55,8 @@ These are the behaviors a host can rely on. Each is pinned by a test named under
   `background-color` or the color of a single-layer `background` shorthand, and the theme's ground
   otherwise. When a rule declares `color` or its ground more than once,
   the pass reads the one CSS applies: the last `!important` declaration if there is one, otherwise
-  the last. It reaches rules nested in `@media` blocks, leaves
+  the last. Property names are ASCII case-insensitive; comments between declaration tokens
+  and delimiters inside strings or functions do not hide declarations. It reaches rules nested in `@media` blocks, leaves
   every other byte unchanged, and is idempotent. A rule it cannot repair (because the foreground
   would not clear the floor on that ground either) is left as the theme wrote it and listed in
   `unrepaired`, and so is a rule that paints a ground and sets no color when the theme's foreground
@@ -68,7 +69,8 @@ These are the behaviors a host can rely on. Each is pinned by a test named under
 - **The configuration is loud.** An unknown key, an unknown theme name, a `contrast.min` outside
   4.5 to 21.0, a `contrast.min_large` outside 3.0 to 21.0 or a text scale outside 0.5 to 4.0 is an
   error that names the field (and, for a floor set too low, the WCAG floor it fell below);
-  nothing silently falls back to a default. Layers merge key by key, so an application's override cannot drop the shared
+  nothing silently falls back to a default. File parsing and validation errors include the layer
+  path as well as the field or parser message. Layers merge key by key, so an application's override cannot drop the shared
   floor by omission.
 - **Reduced motion is never assumed off.** `motion.reduce` left unset means "unstated": the host is
   expected to defer to the operating system through `prefers-reduced-motion` (SC 2.3.3).
@@ -148,11 +150,11 @@ with a failing check. The theme survey is an example run by hand.
 
 | Check | Version | What it covers | What it does not cover |
 |---|---|---|---|
-| `src/color.rs` tests (10) | `cargo test` | The scale's anchors (21:1, 1:1), symmetry, known pairs (1.03:1, 7.63:1, 3.23:1), every hex form and a doubled `#` refused, CSS Color 4 `rgb()`/`rgba()` vectors (comma and space forms, percentages, `/` alpha, `none`, clamping) and the malformed forms refused, refusal of names and other functions, an error that names the accepted forms, alpha compositing | Non-sRGB color spaces; the 0.04045 threshold is not tested separately (no 8-bit value lies between the two) |
-| `src/css.rs` tests (22) | `cargo test` | Lifting below the floor and leaving the rest byte-identical, `background-color` not mistaken for `color`, a rule's own ground from `background-color` or the `background` shorthand, a ground painted with no color, `@media` nesting, comments, compound selectors, unreadable values left alone and listed by `skipped()`, unrepairable themes and rules reported, idempotence, translucent colors, an `rgba()` color and an `rgb()` ground measured like their hex spellings | Non-`color` properties, inherited grounds, large text (the first and last are pinned as limits) |
+| `src/color.rs` tests (11) | `cargo test` | The scale's anchors (21:1, 1:1), symmetry, known pairs (1.03:1, 7.63:1, 3.23:1), adjacent grays (#777 fails 4.5; #767676 passes), every hex form and a doubled `#` refused, CSS Color 4 `rgb()`/`rgba()` vectors (comma and space forms, percentages, `/` alpha, `none`, clamping) and the malformed forms refused, refusal of names and other functions, an error that names the accepted forms, alpha compositing | Non-sRGB color spaces; the 0.04045 threshold is not tested separately (no 8-bit value lies between the two) |
+| `src/css.rs` tests (26) | `cargo test` | Lifting below the floor and leaving the rest byte-identical, `background-color` not mistaken for `color`, a rule's own ground from `background-color` or the `background` shorthand, a ground painted with no color, `@media` nesting, comments before properties and inside `!important`, case-insensitive properties, quoted delimiters, compound selectors, unreadable values left alone and listed by `skipped()`, unrepairable themes and rules reported, idempotence, translucent colors, an `rgba()` color and an `rgb()` ground measured like their hex spellings | Non-`color` properties, inherited grounds, large text (the first and last are pinned as limits) |
 | `src/themes.rs` tests (5, feature `themes`) | `two-face` 0.5, `syntect` 5.3 (caret pins) | The theme table matches `two-face`; both name spellings resolve; the two default themes' ground and foreground; the pass reaches the rule ikigai-browse once patched by hand, idempotently; the survey's totals at 4.5 and 7.0 and the default dark theme's two leftovers | The rules of any theme beyond the two defaults (the survey below lists all 32, by hand) |
-| `src/config.rs` and `src/load.rs` tests (25) | `cargo test` | Key-wise merge (a shared floor survives an override), unknown keys, themes, out-of-range numbers and floors below WCAG AA refused, unstated reduced motion, the three faces, and that the presentation view can never carry a person fact | Whether any host honors the settings |
-| `src/endpoints.rs` tests (24) and `tests/conformance.rs` (2) | `ikigai-conformance` 0.8 | `urn:a11y:contrast` (ratio, verdict, no capability, refusals including a `min` outside 1 to 21, a failing ratio never shown at the floor), the gated and ungated views, golden threads; the module recipe as one test | Everything rendered by a host |
+| `src/config.rs` and `src/load.rs` tests (26) | `cargo test` | Key-wise merge (a shared floor survives an override), unknown keys, themes, out-of-range numbers and floors below WCAG AA refused, validation errors naming the layer path, unstated reduced motion, the three faces, and that the presentation view can never carry a person fact | Whether any host honors the settings |
+| `src/endpoints.rs` tests (26) and `tests/conformance.rs` (2) | `ikigai-conformance` 0.8 | `urn:a11y:contrast` (ratio, verdict, no capability, refusals including a `min` outside 1 to 21, a failing ratio never shown at the floor, invalid UTF-8 arguments and undeclared media types refused), the gated and ungated views, golden threads; the module recipe as one test | Everything rendered by a host |
 | `examples/theme_survey.rs` (by hand) | as `themes` | Every embedded theme at a given floor: rules lifted, rules left, and whether the theme's own foreground clears the floor | The per-theme table is not run in CI; its totals are pinned by a test |
 
 On 2026-10-15 (this file's review) all of them ran on main at `a494ed8`: 63 unit tests with
@@ -166,6 +168,15 @@ doctests passed. The survey at 4.5:1 reported 5 of 32 themes clearing the floor
 unaided, 4 more fully repaired by the pass (SolarizedDark moved out: its `.hl-invalid` paints a
 ground its inherited text reaches at 3.16:1) and 23 with rules left unrepaired; at 7:1, 0, 8 and
 24, unchanged. No embedded theme writes the `background` shorthand.
+
+On 2026-11-11, the ledger #3442 audit reproduced and fixed floor-pass scanning failures
+(case, comments, quoted delimiters and comments in `!important`), missing layer paths on
+validation errors, and optional endpoint arguments silently defaulted after UTF-8 errors or
+accepted with a malformed media type. Default and all-feature runs passed 91 and 96 unit
+tests respectively, 2 conformance tests and 2 doctests each. Clippy (all targets and features)
+and the wasm library clippy check passed. The theme surveys were unchanged: at 4.5:1,
+5 unaided, 4 repaired and 23 incomplete; at 7:1, 0, 8 and 24. These are automated code
+checks, not browser or assistive-technology evidence.
 
 No accessibility checker (axe or similar) has been run on the README or the rustdoc.
 
