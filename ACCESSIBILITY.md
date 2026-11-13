@@ -20,7 +20,7 @@ Adapted from the [ACCESSIBILITY.md template](https://github.com/mgifford/ACCESSI
 | Private channel | [private vulnerability reporting](https://github.com/ikigai-rs/ikigai-a11y/security/advisories/new), for anything security-sensitive |
 | Target | WCAG 2.2 Level AA, for the parts of a host's output this crate decides, and for this repository's own documentation |
 | Status | Evaluation in progress. No conformance claim. |
-| Last reviewed | 2026-11-11 |
+| Last reviewed | 2026-11-12 |
 | Next review | when the contrast math, the floor pass or the config schema changes, when `two-face` or `syntect` changes version, or when WCAG changes its contrast definitions |
 
 ## Commitment
@@ -143,65 +143,45 @@ accessibility tool. Do not infer a conformance claim from a green build or from 
 
 ## Evidence
 
-The tests run on every pull request and every push to main through the shared Rust workflow
-(`.github/workflows/ci.yml`): `cargo test` with default features and with `--all-features`, clippy
-on both, and a clippy build of the library for `wasm32-unknown-unknown`. The maintainers do not merge a pull request
-with a failing check. The theme survey is an example run by hand.
+Following the result format used in [gonk-starter PR #91](https://github.com/ikigai-rs/ikigai-gonk-starter/pull/91),
+every named check has a result: **Pass**, **Fail** or **Blocked**. A Pass applies only to
+that check's stated scope, never to overall accessibility. Blocked means the check has no
+current verification; it does not mean a barrier was found or that the check is unnecessary.
 
-| Check | Version | What it covers | What it does not cover |
-|---|---|---|---|
-| `src/color.rs` tests (11) | `cargo test` | The scale's anchors (21:1, 1:1), symmetry, known pairs (1.03:1, 7.63:1, 3.23:1), adjacent grays (#777 fails 4.5; #767676 passes), every hex form and a doubled `#` refused, CSS Color 4 `rgb()`/`rgba()` vectors (comma and space forms, percentages, `/` alpha, `none`, clamping) and the malformed forms refused, refusal of names and other functions, an error that names the accepted forms, alpha compositing | Non-sRGB color spaces; the 0.04045 threshold is not tested separately (no 8-bit value lies between the two) |
-| `src/css.rs` tests (30) | `cargo test` | Lifting below the floor and leaving the rest byte-identical, `background-color` not mistaken for `color`, a rule's own ground from `background-color` or the `background` shorthand, a ground painted with no color, `@media` nesting, comments before properties and inside `!important`, case-insensitive and escaped properties, quoted and escaped delimiters, URL tokens, deeply nested rules, compound selectors, unreadable values left alone and listed by `skipped()`, unrepairable themes and rules reported, idempotence, translucent colors, an `rgba()` color and an `rgb()` ground measured like their hex spellings | Non-`color` properties, inherited grounds, large text (the first and last are pinned as limits) |
-| `src/themes.rs` tests (5, feature `themes`) | `two-face` 0.5, `syntect` 5.3 (caret pins) | The theme table matches `two-face`; both name spellings resolve; the two default themes' ground and foreground; the pass reaches the rule ikigai-browse once patched by hand, idempotently; the survey's totals at 4.5 and 7.0 and the default dark theme's two leftovers | The rules of any theme beyond the two defaults (the survey below lists all 32, by hand) |
-| `src/config.rs` and `src/load.rs` tests (26) | `cargo test` | Key-wise merge (a shared floor survives an override), unknown keys, themes, out-of-range numbers and floors below WCAG AA refused, validation errors naming the layer path, unstated reduced motion, the three faces, and that the presentation view can never carry a person fact | Whether any host honors the settings |
-| `src/endpoints.rs` tests (26) and `tests/conformance.rs` (2) | `ikigai-conformance` 0.8 | `urn:a11y:contrast` (ratio, verdict, no capability, refusals including a `min` outside 1 to 21, a failing ratio never shown at the floor, invalid UTF-8 arguments and undeclared media types refused), the gated and ungated views, golden threads; the module recipe as one test | Everything rendered by a host |
-| `examples/theme_survey.rs` (by hand) | as `themes` | Every embedded theme at a given floor: rules lifted, rules left, and whether the theme's own foreground clears the floor | The per-theme table is not run in CI; its totals are pinned by a test |
+The Pass results below were run on 2026-11-12 on macOS, on main at
+[`dc196f4f08279fc80f19c335fa0c882edd1577c1`](https://github.com/ikigai-rs/ikigai-a11y/commit/dc196f4f08279fc80f19c335fa0c882edd1577c1),
+before this documentation edit. The toolchain was Rust 1.99.1 and Cargo 1.99.1.
+`cargo test` passed 95 unit tests, 2 conformance tests and 2 doctests;
+`cargo test --all-features` passed 100 unit tests, 2 conformance tests and 2 doctests.
+The shared [CI workflow](.github/workflows/ci.yml) runs default and all-feature tests and
+clippy, plus the wasm library checks, on pull requests and pushes to main. CI does not
+repeat the hand-run theme survey, browser checks or assistive-technology checks.
 
-On 2026-10-15 (this file's review) all of them ran on main at `a494ed8`: 63 unit tests with
-default features and 67 with all features, 2 conformance tests and 1 doctest passed. The survey
-at 4.5:1 reported 5 of 32 themes clearing the floor unaided, 5 more fully repaired by the pass,
-and 22 with rules left unrepaired; at 7:1, 0, 8 and 24.
+| Check | Result | Evidence |
+|---|---|---|
+| `src/color.rs` tests (11) | Pass | `cargo test` and `cargo test --all-features`; Cargo 1.99.1. Covers: The scale's anchors (21:1, 1:1), symmetry, known pairs (1.03:1, 7.63:1, 3.23:1), adjacent grays (#777 fails 4.5; #767676 passes), every hex form and a doubled `#` refused, CSS Color 4 `rgb()`/`rgba()` vectors (comma and space forms, percentages, `/` alpha, `none`, clamping) and the malformed forms refused, refusal of names and other functions, an error that names the accepted forms, alpha compositing. Does not cover: Non-sRGB color spaces; the 0.04045 threshold is not tested separately (no 8-bit value lies between the two). |
+| `src/css.rs` tests (30) | Pass | `cargo test` and `cargo test --all-features`; Cargo 1.99.1. Covers: Lifting below the floor and leaving the rest byte-identical, `background-color` not mistaken for `color`, a rule's own ground from `background-color` or the `background` shorthand, a ground painted with no color, `@media` nesting, comments before properties and inside `!important`, case-insensitive and escaped properties, quoted and escaped delimiters, URL tokens, deeply nested rules, compound selectors, unreadable values left alone and listed by `skipped()`, unrepairable themes and rules reported, idempotence, translucent colors, an `rgba()` color and an `rgb()` ground measured like their hex spellings. Does not cover: Non-`color` properties, inherited grounds, large text (the first and last are pinned as limits). |
+| `src/themes.rs` tests (5, feature `themes`) | Pass | `cargo test --all-features`; `two-face` 0.5.2+bat-0.26.1, `syntect` 5.3.0. Covers: The theme table matches `two-face`; both name spellings resolve; the two default themes' ground and foreground; the pass reaches the rule ikigai-browse once patched by hand, idempotently; the survey's totals at 4.5 and 7.0 and the default dark theme's two leftovers. Does not cover: Detailed per-rule results for themes beyond the two defaults; those require the full survey. |
+| `src/config.rs` and `src/load.rs` tests (26) | Pass | `cargo test` and `cargo test --all-features`; Cargo 1.99.1. Covers: Key-wise merge (a shared floor survives an override), unknown keys, themes, out-of-range numbers and floors below WCAG AA refused, validation errors naming the layer path, unstated reduced motion, the three faces, and that the presentation view can never carry a person fact. Does not cover: Whether any host honors the settings. |
+| `src/endpoints.rs` tests (26) and `tests/conformance.rs` (2) | Pass | `cargo test` and `cargo test --all-features`; `ikigai-conformance` 0.14.0. Covers: `urn:a11y:contrast` (ratio, verdict, no capability, refusals including a `min` outside 1 to 21, a failing ratio never shown at the floor, invalid UTF-8 arguments and undeclared media types refused), the gated and ungated views, golden threads; the module recipe as one test. Does not cover: Everything rendered by a host. |
+| Scratch-directory isolation (`src/scratch.rs`, 2 tests) and doctests (2) | Pass | `cargo test` and `cargo test --all-features`, Cargo 1.99.1. Checks fixture isolation and the color parsing/config-thread examples; does not evaluate rendered documentation. |
+| Rust formatting | Pass | `cargo fmt --check`, rustfmt 1.10.0-stable, on the main revision above. Checks formatting only. |
+| Rust lint checks, default and all features | Pass | `cargo clippy --all-targets -- -D warnings` and `cargo clippy --all-targets --all-features -- -D warnings`, clippy 0.1.99. Checks Rust diagnostics, not rendered accessibility. |
+| Wasm library lint and build | Pass | `cargo clippy --target wasm32-unknown-unknown --lib -- -D warnings` and `cargo build --target wasm32-unknown-unknown --lib`, Rust/Cargo 1.99.1 and clippy 0.1.99, default features. Checks compilation, not a host's output or all-feature wasm support. |
+| Full per-theme survey at 4.5:1 and 7:1 (`examples/theme_survey.rs`) | Blocked | No current survey run; CI does not run this example. Historical run on 2026-11-11 reported 5 unaided / 4 repaired / 23 incomplete at 4.5:1 and 0 / 8 / 24 at 7:1, unchanged after [PR #31](https://github.com/ikigai-rs/ikigai-a11y/pull/31). Historical Rust/Cargo versions were not recorded here. The current `src/themes.rs` test pins these totals and the default dark theme's two leftovers, not the full per-theme table. |
+| Historical test and survey runs | Blocked | Not rerun at their historical revisions. 2026-10-15: 63/67 default/all-feature unit tests, 2 conformance tests and 1 doctest; survey 5/5/22 at 4.5 and 0/8/24 at 7. 2026-11-02: 83/88 unit tests, 2 conformance tests and doctests; survey 5/4/23 and 0/8/24 ([PR #27](https://github.com/ikigai-rs/ikigai-a11y/pull/27)). 2026-11-11: 91/96 unit tests, then 95/100, each with 2 conformance tests and 2 doctests ([PR #30](https://github.com/ikigai-rs/ikigai-a11y/pull/30), [PR #31](https://github.com/ikigai-rs/ikigai-a11y/pull/31)). Tool versions were not recorded here; these are historical context, not current Pass evidence. |
+| Documentation automated accessibility checker (axe or similar) | Blocked | No checker has been run on the README rendered by GitHub/crates.io or rustdoc on docs.rs; no browser checker was configured for this review. Rust tests do not evaluate rendered documentation. |
+| Browser rendering, zoom/reflow, focus, names and roles | Blocked | No browser run against this repository's documentation or a host's rendered output. No browser evaluation environment was configured for this review. Library tests cannot verify layout, inherited backgrounds, non-text contrast or whether a host uses the repaired stylesheet. |
+| Manual keyboard | Blocked | No person has performed a keyboard pass on the rendered documentation; no interactive browser session was available for this review. |
+| Screen reader | Blocked | No screen reader has been used on this repository or its documentation; no screen reader session was available for this review. |
+| Screen magnifier | Blocked | No screen magnifier has been used; no magnifier session was available for this review. |
+| Speech input | Blocked | No speech-input software has been used; no speech-input session was available for this review. |
+| Switch access | Blocked | No switch-access software has been used; no switch-access session was available for this review. |
+| Braille display | Blocked | No braille display has been used; no braille display was available for this review. |
 
-On 2026-11-02, after the pass began to read the `background` shorthand and to judge a ground
-painted with no color, 83 unit tests with default features and 88 with all features, 2 conformance tests and the
-doctests passed. The survey at 4.5:1 reported 5 of 32 themes clearing the floor
-unaided, 4 more fully repaired by the pass (SolarizedDark moved out: its `.hl-invalid` paints a
-ground its inherited text reaches at 3.16:1) and 23 with rules left unrepaired; at 7:1, 0, 8 and
-24, unchanged. No embedded theme writes the `background` shorthand.
-
-On 2026-11-11, the ledger #3442 audit reproduced and fixed floor-pass scanning failures
-(case, comments, quoted delimiters and comments in `!important`), missing layer paths on
-validation errors, and optional endpoint arguments silently defaulted after UTF-8 errors or
-accepted with a malformed media type. Default and all-feature runs passed 91 and 96 unit
-tests respectively, 2 conformance tests and 2 doctests each. Clippy (all targets and features)
-and the wasm library clippy check passed. The theme surveys were unchanged: at 4.5:1,
-5 unaided, 4 repaired and 23 incomplete; at 7:1, 0, 8 and 24. These are automated code
-checks, not browser or assistive-technology evidence.
-
-Also on 2026-11-11, the floor pass switched its scanner to `cssparser` 0.38.0,
-using source byte offsets rather than serializing tokens. The 26 existing scanner tests
-passed unchanged, with four more tests for escaped identifiers and important flags,
-URL and escaped delimiters, UTF-8 offsets, source order and 100 nested media blocks.
-Default and all-feature runs passed 95 and 100 unit tests, 2 conformance tests and
-2 doctests each. Default and all-feature clippy, wasm library clippy and the wasm
-library build passed. The theme surveys remained 5/4/23 at 4.5:1 and 0/8/24 at 7:1
-(unaided/repaired/incomplete). No browser or assistive technology was tested.
-
-No accessibility checker (axe or similar) has been run on the README or the rustdoc.
-
-## Browsers and assistive technology, as tested
-
-Only what has actually been run. This is not a list of what is supported.
-
-| Platform | Browser | Assistive technology | What | When |
-|---|---|---|---|---|
-| GitHub Actions, the shared workflow's runner | none | none | `cargo test`, default and all features | every pull request and every push to main |
-| macOS | none | none | `cargo test` and the theme survey at 4.5 and 7.0 | 2026-10-15 |
-| Linux | none | none | `cargo test` and the theme survey at 4.5 and 7.0 | 2026-11-02 |
-
-**No screen reader, screen magnifier, speech-input or switch-access software has been used to test
-this repository or its documentation, and no browser has been run against either.** This crate has
-no interface of its own; its effect on people is only ever seen through a host's pages.
+The crate has no interface of its own. Its effects on people must also be evaluated in each
+host's pages; a library test cannot substitute for those checks. The Blocked documentation
+and assistive-technology checks remain in scope even though this crate renders no pages.
 
 ## Known limitations
 
@@ -245,9 +225,15 @@ A change to anything in scope:
 ## Accessibility
 
 - What a host or a reader gets differently:
-- Automated: cargo test (default and all features), clippy, wasm build: pass / fail
-- Theme survey at 4.5 and 7.0, if themes or the pass changed: numbers, or "not run"
-- Not tested, and known limitations:
+
+| Check | Result | Evidence |
+|---|---|---|
+| Automated: tests, clippy, wasm build | Pass / Fail / Blocked | Commands, tool versions, revision, scope and limitations |
+| Theme survey at 4.5 and 7.0 | Pass / Fail / Blocked | Command, tool versions and numbers, or why it could not run |
+| Browser, keyboard and each assistive technology | Pass / Fail / Blocked | What was tried and with which versions, or why it could not run |
+
+Keep every unrun check as Blocked, including each assistive technology nobody used.
+Record historical runs CI does not repeat as Blocked with their dates.
 ```
 
 ## Coding agents and automation
@@ -298,10 +284,10 @@ after a reported barrier is fixed, and before any conformance claim.
 | Date | Change | Evidence |
 |---|---|---|
 | 2026-08-15 | The crate: WCAG math, the layered config, the floor pass | the first commit |
-| 2026-08-15 | The ungated presentation view; person facts stay behind the capability | PR #2 |
-| 2026-08-23 | The endpoints take their config home, so the tests own the files they read | PR #4 |
-| 2026-10-15 | This file | PR #16 |
-| 2026-11-02 | The pass reads the `background` shorthand and judges a ground painted with no color; the survey totals are pinned by a test (ledger #1652) | this change's pull request |
+| 2026-08-15 | The ungated presentation view; person facts stay behind the capability | [PR #2](https://github.com/ikigai-rs/ikigai-a11y/pull/2) |
+| 2026-08-23 | The endpoints take their config home, so the tests own the files they read | [PR #4](https://github.com/ikigai-rs/ikigai-a11y/pull/4) |
+| 2026-10-15 | This file | [PR #16](https://github.com/ikigai-rs/ikigai-a11y/pull/16) |
+| 2026-11-02 | The pass reads the `background` shorthand and judges a ground painted with no color; the survey totals are pinned by a test | [PR #27](https://github.com/ikigai-rs/ikigai-a11y/pull/27) |
 
 ## References
 
