@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0
+
+### Changed
+
+- Pins `ikigai-core` 0.4.0 (scope opacity, structured denials; the core 0.4.0 cascade, ledger
+  #3893). A minor, not a patch: the public API now speaks core 0.4 types, so a consumer on core
+  0.3 cannot mix them. The capability refusal on `urn:a11y:config` is now `Error::Denied(Denial)`
+  carrying the same message; no other behavior changes.
+- Dev-dependency `ikigai-conformance` moves to 0.15.0, its release on core 0.4.0.
+
 ## 0.5.1
 
 ### Fixed
