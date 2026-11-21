@@ -272,9 +272,9 @@ fn config_impl(handle: &A11yHandle, inv: &Invocation<'_>) -> Result<Representati
     // invocation, a module shim, or (see `crate::load`) a linked library calling in
     // as plain Rust, where nothing resolves an IRI and nothing checks a capability.
     if !inv.capability.allows(CAP_READ) {
-        return Err(Error::Denied(format!(
-            "reading the accessibility config requires `{CAP_READ}`"
-        )));
+        return Err(Error::Denied(
+            format!("reading the accessibility config requires `{CAP_READ}`").into(),
+        ));
     }
     let app = inv.bindings.get("app");
     let effective = handle.complete(app).map_err(config_error)?;
@@ -832,7 +832,9 @@ mod tests {
         let nothing = Capability::scoped(Vec::<String>::new());
         let request = Request::new(Verb::Source, iri(CONFIG_IRI));
         match invoke(&config(), request, &nothing) {
-            Err(Error::Denied(message)) => assert!(message.contains(CAP_READ), "{message}"),
+            Err(Error::Denied(denial)) => {
+                assert!(denial.message().contains(CAP_READ), "{denial}")
+            }
             other => panic!("{other:?}"),
         }
     }
