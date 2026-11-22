@@ -132,6 +132,8 @@ dark = "Dracula"
 
 cms-web gets Dracula **and** the 7.0 floor. Wholesale replacement — the easy
 accidental implementation — would silently drop the operator's floor.
+An application that explicitly sets `min` can lower the shared 7.0 to 4.5.
+Each layer must satisfy the WCAG AA minimums of 4.5 for `min` and 3.0 for `min_large`.
 
 ## Mounting: the config home is stated, not sniffed
 
@@ -198,8 +200,8 @@ Three things are deliberately not what a first sketch reaches for:
   nothing is the same defect as a misspelled theme that silently renders the
   default: the operator asked for something and got something else without being
   told. Unknown theme names and out-of-range numbers are errors for the same
-  reason, and so is a floor below WCAG AA: an operator may raise `min` from 4.5
-  or `min_large` from 3.0, never lower them.
+  reason. The lowest accepted floors are the WCAG AA values of 4.5 for `min`
+  and 3.0 for `min_large`.
 
 ## The contrast-floor pass
 

@@ -56,7 +56,7 @@ These are the behaviors a host can rely on. Each is pinned by a test named under
   otherwise. When a rule declares `color` or its ground more than once,
   the pass reads the one CSS applies: the last `!important` declaration if there is one, otherwise
   the last. Property names are decoded as CSS identifiers and are ASCII case-insensitive; comments between declaration tokens
-  and delimiters inside strings or functions do not hide declarations. It reaches rules nested in `@media` blocks, leaves
+  and delimiters inside strings, functions, or custom-property values do not hide declarations. It reaches rules nested in `@media` blocks, leaves
   every other byte unchanged, and is idempotent. A rule it cannot repair (because the foreground
   would not clear the floor on that ground either) is left as the theme wrote it and listed in
   `unrepaired`, and so is a rule that paints a ground and sets no color when the theme's foreground
