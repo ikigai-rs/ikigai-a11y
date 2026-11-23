@@ -273,6 +273,22 @@ fn child_blocks(css: &str, base: usize) -> Vec<Block> {
         };
         match token {
             Token::WhiteSpace(_) | Token::Comment(_) => continue,
+            Token::Semicolon => selector_start = None,
+            Token::Ident(name)
+                if base != 0 && selector_start.is_none() && name.starts_with("--") =>
+            {
+                // A custom property's value may itself contain braces and
+                // semicolons. Consume the entire value as declaration data.
+                if parser.try_parse(Parser::expect_colon).is_ok() {
+                    let _: Result<(), cssparser::ParseError<()>> =
+                        parser.parse_until_after(Delimiter::Semicolon, |value| {
+                            while value.next_including_whitespace_and_comments().is_ok() {}
+                            Ok(())
+                        });
+                } else {
+                    selector_start = Some(start);
+                }
+            }
             Token::CurlyBracketBlock => {
                 let selector = base + selector_start.unwrap_or(start)..base + start;
                 let body_start = parser.position().byte_index();
@@ -496,6 +512,37 @@ mod tests {
             Rgba::parse(DARK_GROUND).unwrap(),
             Rgba::parse(DARK_FOREGROUND).unwrap(),
         )
+    }
+
+    #[test]
+    fn braced_custom_property_values_do_not_hide_or_masquerade_as_rules() {
+        let white = Rgba::rgb(255, 255, 255);
+        let black = Rgba::rgb(0, 0, 0);
+        let gray = 119.0_f64 / 255.0;
+        let luminance = ((gray + 0.055) / 1.055).powf(2.4);
+        let expected_ratio = (1.0 + 0.05) / (luminance + 0.05);
+        assert!(expected_ratio < 4.5);
+
+        for (css, repaired) in [
+            (
+                ".a { --data: { color: #777; }; color: #777; }",
+                ".a { --data: { color: #777; }; color: #000000; }",
+            ),
+            (
+                r".a { color: #777; \2d -Data /* payload */ : before { color: var(--Nope); } }",
+                r".a { color: #000000; \2d -Data /* payload */ : before { color: var(--Nope); } }",
+            ),
+        ] {
+            let pass = apply_floor(css, white, black, 4.5);
+            assert_eq!(pass.css, repaired);
+            assert_eq!(pass.lifted.len(), 1);
+            assert_eq!(pass.lifted[0].selector, ".a");
+            assert!((pass.lifted[0].ratio - expected_ratio).abs() < 1e-12);
+            assert!(pass.clears_floor());
+            let second = apply_floor(&pass.css, white, black, 4.5);
+            assert!(second.lifted.is_empty());
+            assert_eq!(second.css, repaired);
+        }
     }
 
     #[test]
